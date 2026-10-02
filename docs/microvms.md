@@ -72,6 +72,8 @@ DNS defaults to public resolvers `1.1.1.1` and `9.9.9.9`. Setting `networking.al
 
 The module integrates forwarding accepts with the NixOS firewall while its earlier nftables chain enforces denials. On a normal NixOS nftables reload, empty source sets and a default-drop readiness chain deny guest egress until the helper atomically rebuilds every guard. A periodic two-second reconciliation also restores policy after reloads. Stopping nftables stops its dependent VM services before removing the firewall. Do not delete the table manually or reuse the reserved `tdt` interface prefix. Existing host VPN routing and upstream firewall policy still determine whether allowed public traffic can reach the Internet.
 
+IPv4 forwarding is enabled with `lib.mkDefault 1`, so a VPN or router module can already define `boot.kernel.sysctl."net.ipv4.ip_forward" = 1` without a duplicate-definition error. Forwarding must remain enabled; an explicit disabling value produces a Tokendrain assertion during evaluation.
+
 ## Snapshots, restores and locks
 
 A pre-run snapshot copies both offline images using `cp --reflink=auto --sparse=always`. Filesystems with reflinks share unchanged blocks; other filesystems get a sparse ordinary copy. A snapshot is published only after both copies and metadata are complete. Insufficient space or a failed copy leaves no partially published snapshot.

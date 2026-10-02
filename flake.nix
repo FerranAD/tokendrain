@@ -110,6 +110,8 @@
               imports = [ self.nixosModules.tokendrain ];
               documentation.enable = false;
               services.tokendrain.enable = true;
+              # Regression: coexist with forwarding already enabled by a VPN module.
+              boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
               # Service/API smoke test does not boot a nested Firecracker VM.
               services.tokendrain.microvm.guestArtifacts = pkgs.emptyDirectory;
               virtualisation.memorySize = 2048;
@@ -119,6 +121,7 @@
               machine.start()
               machine.wait_for_unit("tokendraind.service")
               machine.wait_for_open_port(8742)
+              assert machine.succeed("sysctl -n net.ipv4.ip_forward").strip() == "1"
               machine.succeed("curl --fail http://127.0.0.1:8742/healthz")
               assert json.loads(machine.succeed("tokendrain --json projects")) == []
               assert json.loads(machine.succeed("tokendrain --json runs")) == []

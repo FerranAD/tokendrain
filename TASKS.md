@@ -105,3 +105,17 @@ are not claimed as live-tested. See [the acceptance checklist](docs/development.
 Installation starts with [README.md](README.md); no runtime secrets belong in Git or
 the Nix store. Parallel implementation workers reached their provider usage limit
 during finalization; the main session completed all remaining local checks.
+
+## Installation fix — IPv4 forwarding composition
+
+- User installation exposed duplicate `net.ipv4.ip_forward = 1` definitions from
+  Tokendrain and a VPN module. NixOS sysctl values use `mergeOneOption`, rejecting
+  even equal ordinary definitions.
+- Tokendrain now sets `lib.mkDefault 1` and asserts that the effective value stays
+  enabled. Existing VPN/router definitions compose without forcing their priority.
+- The NixOS service smoke test includes an external ordinary forwarding definition
+  and checks the running kernel value. Rebuilt test passed in **18.82 seconds**.
+- Seven focused evaluations passed: standalone, external `1`/`"1"`/`true`, and
+  expected assertion failures for `0`/`false`/`null`.
+- Flake evaluation passes for both supported architectures; Ruff and strict mypy
+  remain clean. Networking composition behavior is documented in `docs/microvms.md`.

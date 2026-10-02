@@ -136,6 +136,14 @@ in
         assertion = lib.hasPrefix "/" cfg.stateDirectory && !(lib.hasInfix " " cfg.stateDirectory);
         message = "Tokendrain stateDirectory must be an absolute path without spaces.";
       }
+      {
+        assertion = builtins.elem config.boot.kernel.sysctl."net.ipv4.ip_forward" [
+          1
+          "1"
+          true
+        ];
+        message = "Tokendrain requires boot.kernel.sysctl.\"net.ipv4.ip_forward\" to be enabled for guest networking.";
+      }
     ];
     users.groups.tokendrain = { };
     users.groups.tokendrain-vm = { };
@@ -154,7 +162,9 @@ in
       "kvm"
       "tun"
     ];
-    boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
+    # sysctl values use mergeOneOption, so even two ordinary definitions of 1
+    # conflict. Allow an existing VPN/router configuration to supply this value.
+    boot.kernel.sysctl."net.ipv4.ip_forward" = lib.mkDefault 1;
     networking.nftables.enable = true;
     networking.nftables.tables.tokendrain = {
       family = "inet";
