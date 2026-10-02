@@ -5,12 +5,16 @@
 - [x] Build run preparation, execution detail, reports, cancellation, and SSE event delivery.
 - [x] Build schedules, session/OpenAI authentication, GitHub App setup and narrowed repository permissions, described `.env` bundles, and environment/snapshot controls.
 - [x] Build and strictly type-check frontend; document workflow in `web/README.md`.
-- [x] Run nine Chromium browser tests covering the API contract, login storage behavior, project/run/schedule creation, task edits, secret descriptions, GitHub permissions, cancellation, SSE text rendering, and mobile layout.
+- [x] Run ten Chromium fixture tests covering the API contract, login storage behavior, project/run/schedule creation, task edits, secret descriptions, GitHub permissions and setup return, cancellation, SSE text rendering, and mobile layout.
 - [x] Inspect desktop dashboard and mobile environment screenshots.
+- [x] Run the browser against the real daemon with explicit mock storage/execution: project creation, tasks/feedback, secrets, snapshots/restore/resize, run/report/SSE, history, schedules, and defaults.
+- [x] Add authenticated GitHub discovery prompt after the public setup callback; ignore returned installation identifiers.
 
-Validation: `npm run build` passes; `npm test` passes 9/9 with Nix Chromium. Browser tests use explicit intercepted API fixtures. A live-daemon browser smoke remains an integration check once host endpoints are available; provider authentication still requires the user's real account.
+Validation: `npm run build` passes; `npm test` passes 11/11 with Nix Chromium and the live-daemon opt-in variables. Ten browser tests use explicit intercepted API fixtures; the eleventh uses the real daemon API and persistent SQLite with a mock VM backend. No browser JavaScript errors occurred. Real OpenAI sign-in and GitHub installation/repository writes require the user's provider accounts.
 
 ## Graceful restart checkpoint (root)
+
+Historical checkpoint below; all listed unfinished frontend work was completed after resuming.
 
 User requested stop while frontend work was in progress. Frontend agent interrupted
 before final handoff to ensure no background implementation continues during restart.

@@ -171,6 +171,9 @@ function OpenAISettings() {
 
 function GitHubSettings() {
   const status = useResource<GitHubStatus>('/integrations/github');
+  const [installationReturned, setInstallationReturned] = useState(
+    new URLSearchParams(window.location.search).get('github') === 'installed',
+  );
   const [appId, setAppId] = useState('');
   const [slug, setSlug] = useState('');
   const [key, setKey] = useState('');
@@ -179,6 +182,30 @@ function GitHubSettings() {
   const origin = window.location.origin;
   return (
     <section className="panel" id="github">
+      {installationReturned && (
+        <div className="callout">
+          <strong>Continue your GitHub setup</strong>
+          <p>
+            GitHub returned you to tokendrain. Refresh installations to discover repositories
+            authorized for your configured App.
+          </p>
+          <button
+            className="top-space"
+            disabled={action.busy || !status.data?.configured}
+            onClick={() => {
+              void action.run(async () => {
+                await mutate('/integrations/github/sync', 'POST', {});
+                const url = new URL(window.location.href);
+                url.searchParams.delete('github');
+                window.history.replaceState(null, '', url.pathname + url.search);
+                setInstallationReturned(false);
+              }, 'Installations refreshed. Select a repository from your project’s GitHub tab.');
+            }}
+          >
+            Discover installed repositories
+          </button>
+        </div>
+      )}
       <div className="row between">
         <div>
           <div className="eyebrow">Repository integration</div>

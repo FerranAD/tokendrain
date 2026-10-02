@@ -44,6 +44,8 @@ npm test
 
 Elsewhere with a compatible Linux userspace, `npx playwright install chromium` installs the default test browser. `npm test` launches an isolated Vite server at port 5175. Screenshots and failure traces are written under the ignored `test-results/` directory.
 
+To test the real daemon API, start a dedicated mock instance and set `TOKENDRAIN_LIVE_URL=http://127.0.0.1:8742` and `TOKENDRAIN_LIVE_TOKEN_FILE` to its protected admin-token file. `npm test -- tests/live-daemon.spec.ts` then exercises project editing, described secrets, storage controls, run reports/events, schedules, and settings through the browser. It refuses a non-mock backend and disables trace recording. See [development instructions](../docs/development.md) for the full command. Without those variables, this test is skipped.
+
 ## Authentication and live updates
 
 The administration token is submitted once to `/session`. The server establishes an HttpOnly session cookie. Tokens and credentials are never saved in localStorage or sessionStorage. Secret form values are cleared after successful submission. API requests include `X-Tokendrain-Request: 1`; the server remains responsible for checking the session and Origin.

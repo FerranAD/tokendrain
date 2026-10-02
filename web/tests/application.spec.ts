@@ -347,3 +347,16 @@ test('cancelling an active run requests orderly shutdown', async ({ page }) => {
   });
   expect(errors).toEqual([]);
 });
+
+test('GitHub setup return requires authenticated discovery instead of trusting query data', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page);
+  await page.goto('/settings?github=installed');
+  await expect(page.getByText('Continue your GitHub setup', { exact: true })).toBeVisible();
+  expect(writes).toEqual([]);
+  await page.getByRole('button', { name: 'Discover installed repositories' }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  expect(writes).toEqual([{ path: '/integrations/github/sync', method: 'POST', body: {} }]);
+  expect(errors).toEqual([]);
+});

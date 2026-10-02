@@ -66,6 +66,7 @@ Schedule: `{id,name,cron,timezone,enabled,run_template,next_run_at?,last_run_at?
 - `GET /integrations/github` → `{configured,app_id?,app_slug?,installation_url?,installations:Installation[]}`
 - `PUT /integrations/github {app_id,private_key,app_slug?}`
 - `POST /integrations/github/sync {}`
+- `GET /integrations/github/setup` → public, side-effect-free redirect to `/settings?github=installed`; query installation IDs are not trusted. Settings offers an authenticated `POST /integrations/github/sync` to perform discovery.
 - `GET /integrations/github/installations/{id}/repositories` → `Repository[]`
 - `GET /projects/{id}/github` → `ProjectGitHub|null`
 - `PUT /projects/{id}/github {installation_id,repository_id,repository_name,permissions:{contents:"read"|"write",pull_requests?:"read"|"write",issues?:"read"|"write",actions?:"read"}}`
