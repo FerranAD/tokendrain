@@ -101,15 +101,25 @@ async def execute(
         try:
             token = await asyncio.to_thread(read_token, path)
             status = await fetch(client, url, token, "system")
-            checks.append(DoctorCheck(name="daemon_api", ok=True, message=f"Authenticated: {url}"))
+            checks.append(
+                DoctorCheck(
+                    name="daemon_api", ok=True, scope="daemon", message=f"Authenticated: {url}"
+                )
+            )
             for check in status.get("checks", []):
-                if check.get("name") == "reconciliation":
-                    checks.append(DoctorCheck.model_validate(check))
+                parsed = DoctorCheck.model_validate(check)
+                if (
+                    parsed.scope == "helper"
+                    or parsed.name == "reconciliation"
+                    or (parsed.scope == "daemon" and not parsed.ok)
+                ):
+                    checks.append(parsed)
         except (OSError, ValueError, httpx.HTTPError):
             checks.append(
                 DoctorCheck(
                     name="daemon_api",
                     ok=False,
+                    scope="daemon",
                     message=f"Cannot authenticate/reach {url}; token file {path}",
                 )
             )
@@ -117,9 +127,8 @@ async def execute(
             print(json.dumps([check.model_dump() for check in checks], indent=2), file=output)
         else:
             for check in checks:
-                print(
-                    f"{'OK  ' if check.ok else 'FAIL'} {check.name}: {check.message}", file=output
-                )
+                label = check.name if check.scope == "host" else f"{check.scope}.{check.name}"
+                print(f"{'OK  ' if check.ok else 'FAIL'} {label}: {check.message}", file=output)
         return 0 if all(check.ok for check in checks) else 1
     token = await asyncio.to_thread(read_token, path)
     resource = "system" if arguments.command == "status" else arguments.command

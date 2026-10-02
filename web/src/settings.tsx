@@ -418,7 +418,7 @@ function SystemSettings() {
             </div>
           </dl>
           <SystemForm system={status.data} />
-          <h3 className="top-space">Host checks</h3>
+          <h3 className="top-space">System checks</h3>
           <div className="checks">
             {status.data.checks.map((check) => (
               <div className="check" key={check.name}>
@@ -430,7 +430,10 @@ function SystemSettings() {
                 </span>
                 <div>
                   <strong>{check.name}</strong>
-                  <p className="small muted">{check.message}</p>
+                  <p className="small muted">
+                    {check.scope && `${check.scope}: `}
+                    {check.message}
+                  </p>
                 </div>
               </div>
             ))}

@@ -1,4 +1,3 @@
-import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -44,7 +43,7 @@ from tokendrain.db.models import (
     Setting,
     UsageSnapshot,
 )
-from tokendrain.doctor import inspect_system
+from tokendrain.doctor import inspect_service_checks
 from tokendrain.domain import (
     TERMINAL,
     ProjectCreate,
@@ -779,10 +778,14 @@ async def detach_github(request: Request, project_id: str) -> Response:
 async def system(request: Request) -> Any:
     services = current(request)
     settings = services.settings
-    checks = await asyncio.to_thread(inspect_system, settings)
+    checks = [
+        check.model_dump()
+        for check in await inspect_service_checks(settings, services.supervisor.vm)
+    ]
     checks.append(
         {
             "name": "reconciliation",
+            "scope": "daemon",
             "ok": services.supervisor.ready,
             "message": services.supervisor.recovery_error or "VM recovery complete",
         }

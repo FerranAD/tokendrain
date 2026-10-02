@@ -103,7 +103,12 @@ export interface SystemInfo {
   backend: string;
   concurrency: number;
   vm_defaults: { vcpus: number; memory_mib: number; disk_gib: number };
-  checks: { name: string; ok: boolean; message: string }[];
+  checks: {
+    name: string;
+    ok: boolean;
+    message: string;
+    scope?: 'host' | 'daemon' | 'helper' | 'mock';
+  }[];
   uptime_seconds?: number;
   active_executions?: number;
 }
