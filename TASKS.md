@@ -119,3 +119,29 @@ during finalization; the main session completed all remaining local checks.
   expected assertion failures for `0`/`false`/`null`.
 - Flake evaluation passes for both supported architectures; Ruff and strict mypy
   remain clean. Networking composition behavior is documented in `docs/microvms.md`.
+
+## Installation fix — diagnostics respect service isolation
+
+- User testing showed host `doctor` succeeding while API `status` falsely reported
+  missing KVM, TUN, Firecracker, ip, nft and Nix. The web daemon intentionally has
+  `PrivateDevices` and a restricted PATH; its local checks were using the wrong
+  execution context for VM prerequisites.
+- Added an authenticated, argument-free, read-only helper `diagnostics` operation.
+  It inspects the helper's real devices, configured Firecracker binary, network
+  tools, forwarding, cgroups and guest artifacts without taking the lifecycle lock
+  or modifying resources. The backend validates typed results with a five-second
+  deadline; unavailable or invalid diagnostics remain failures.
+- Status retains daemon-local storage, database, credential and application-tool
+  checks and labels their scope. It no longer requires a host Nix CLI at runtime.
+  CLI doctor still checks the host and now also reports helper/service failures.
+  The UI displays diagnostic scope. Device isolation and capabilities are unchanged.
+- Local verification: **140 Python tests passed**, Ruff/format and strict mypy
+  clean. TypeScript/production build, Prettier and **10 browser fixture tests** pass;
+  the unrelated opt-in live browser test was not enabled for this change.
+- Nix package verification: **139 passed, 1 skipped** (Codex executable unavailable
+  in the build sandbox), with KVM selected separately. Both architecture flake
+  evaluations pass. The service VM regression verifies scope, helper tools, missing
+  artifacts as a real failure, and preserved `PrivateDevices`/empty capabilities.
+- Final real VM checks passed: **NixOS service in 18.28 seconds**, and **nested
+  Firecracker in 132.74 seconds**, including successful helper probes, concurrent
+  guests, network isolation/reloads, persistence, recovery and cleanup.

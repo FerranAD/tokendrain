@@ -58,8 +58,10 @@ Schedule: `{id,name,cron,timezone,enabled,run_template,next_run_at?,last_run_at?
 - `POST /auth/openai/login {}` → `{id,url}` (host Codex supported login flow)
 - `POST /auth/openai/import {auth_json:object}`
 - `DELETE /auth/openai`
-- `GET /system` → `{version,backend,concurrency,vm_defaults:{vcpus,memory_mib,disk_gib},checks:[{name,ok,message}],uptime_seconds?,active_executions?}`
+- `GET /system` → `{version,backend,concurrency,vm_defaults:{vcpus,memory_mib,disk_gib},checks:[{name,ok,message,scope}],uptime_seconds?,active_executions?}`
 - `PATCH /system {concurrency,vm_defaults:{vcpus,memory_mib,disk_gib}}`
+
+Check `scope` identifies `daemon`, `helper`, or `mock` (local CLI diagnostics also use `host`). VM prerequisites are probed through the authenticated helper; missing devices or tools in the web daemon's restricted namespace are not reported as host failures. An unavailable helper produces a failing `helper` check.
 
 ## GitHub
 

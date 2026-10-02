@@ -24,7 +24,7 @@ flowchart LR
 | Component | Responsibilities | Authority |
 | --- | --- | --- |
 | `tokendraind` | API, UI, projects, runs, scheduling, account refresh, GitHub broker, reports and events | Unprivileged service user; can decrypt application credentials |
-| `tokendrain-helper` | Bounded VM start/stop/list, TAP policy, transient units, recovery records | Restricted privileged service with fixed operations and validated IDs |
+| `tokendrain-helper` | Bounded VM start/stop/list, read-only diagnostics, TAP policy, transient units, recovery records | Restricted privileged service with fixed operations and validated IDs |
 | Firecracker | KVM virtualization and guest devices | Dedicated VMM user, restricted filesystem view and cgroups |
 | `tokendrain-guestd` | Codex supervision/proxy, runtime credentials, rotation and shutdown | Root inside one guest |
 | Codex and its commands | Autonomous project work | Full guest access, assigned runtime credentials and permitted destinations |
