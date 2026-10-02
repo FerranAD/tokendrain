@@ -55,7 +55,7 @@ Disk opens traverse directory descriptors with `O_NOFOLLOW` and reject symlinks,
 
 Each VM reserves its configured RAM plus 512 MiB VMM overhead against the aggregate budget. The default budget is 75% of host physical memory. Platform per-VM limits and concurrency are enforced again by the helper, independently of the HTTP scheduler. Do not grant untrusted users access to the helper socket or the daemon's administrative bearer token.
 
-The generated encryption key lives at `/var/lib/tokendrain-keys/master.key` in a root-only directory and reaches the daemon through `LoadCredential`. With `masterKeyFile`, supply a runtime string path, for example `"/run/secrets/tokendrain-key"`; do not put secret file contents in a Nix path. Back up that key alongside the application database and project disks.
+The generated encryption key lives at `/var/lib/tokendrain-keys/master.key` in a root-only directory and reaches the daemon through `LoadCredential`. A private mode-0600 copy in `/run/tokendrain-auth/master-key` accommodates systemd credential mount permissions without weakening the application's key-file checks. With `masterKeyFile`, supply a runtime string path, for example `"/run/secrets/tokendrain-key"`; do not put secret file contents in a Nix path. Back up the long-lived key alongside the application database and project disks.
 
 ## Network policy
 
@@ -120,6 +120,8 @@ systemctl list-units 'tokendrain-vm-*'
 nft list table inet tokendrain
 ip link show
 ```
+
+Run `sudo tokendrain doctor` for host diagnostics and `sudo tokendrain login-token` to retrieve the browser's administrative login token. `tokendrain status`, `projects` and `runs` use the protected token file; run them as an account allowed to read it. Use `--json` before the command for structured output. The module publishes non-secret paths/defaults in `/etc/tokendrain/platform.json`; environment variables and explicit CLI options can select another deployment.
 
 The backend records execution/project IDs in helper logs. Firecracker console output appears in the corresponding transient service's journal. Console output is untrusted guest output and may contain values printed by software inside the VM; restrict access and retention accordingly.
 

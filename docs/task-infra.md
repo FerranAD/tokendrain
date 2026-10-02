@@ -113,3 +113,33 @@ Remaining cross-component validation:
   validation. Live OpenAI/GitHub credentials are not needed or used in these
   infrastructure tests; provider-authenticated autonomous runs need their own
   end-to-end acceptance test.
+
+## Daemon, CLI and installed HTTP service
+
+- Added `tokendraind` entrypoint using one Uvicorn worker, application lifespan
+  ownership, bounded graceful shutdown and disabled request access logs.
+- Added `tokendrain status`, `projects`, `runs`, `login-token` and `doctor` with
+  explicit protected-token authentication, environment/CLI settings and JSON
+  output. The module publishes only non-secret paths/defaults in
+  `/etc/tokendrain/platform.json` so host-side commands discover deployments.
+- Doctor checks actual KVM API, TUN, tool availability, guest artifact files,
+  helper socket, protected key validity, free disk space, IPv4 forwarding,
+  cgroup controllers and bounded read-only SQLite integrity/migration state.
+- Host and helper share JSON logging. Known values, bearer credentials and URL
+  queries/userinfo are redacted. Exception call sites are retained without
+  serializing exception values or arbitrary logging extras.
+- Real module boot found systemd's protected credential mount can expose a
+  group-readable file mode. ExecStartPre now copies the runtime credential to
+  a mode-0600 file in the daemon-owned mode-0700 tmpfs authentication directory.
+  The long-lived key remains root-only; no key material enters the Nix store.
+- Full NixOS HTTP module test passed in 18.61 seconds: SQLite migration, real
+  helper startup, API health, packaged React frontend, authenticated CLI reads,
+  unauthenticated API rejection, runtime key mode and clean service shutdown.
+- Added focused CLI/logging/doctor tests and a real subprocess daemon/client
+  integration test using the mock execution backend and actual HTTP. It checks
+  project creation, API authentication, SIGTERM cleanup and omission of callback
+  authorization codes and administrative tokens from logs.
+- Final packaged service test passed again in 17.87 seconds after adding platform
+  resource caps and the full CLI integration test. Nix's packaged Python suite
+  passed 93 tests, with one local-Codex skip and one separately exercised KVM
+  deselection. All 12 focused CLI tests pass; Ruff/mypy pass for owned sources.

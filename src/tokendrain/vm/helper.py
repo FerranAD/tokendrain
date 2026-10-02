@@ -18,7 +18,6 @@ import signal
 import socket
 import stat
 import struct
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
@@ -26,6 +25,7 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from tokendrain.logging import configure_logging
 from tokendrain.networking.linux import LinuxNetwork, NetworkAllocation, allocation
 from tokendrain.storage.files import atomic_json, durable_io
 
@@ -33,20 +33,6 @@ from .commands import CommandRunner, Runner
 from .models import VmHandle, VmSpec
 
 logger = logging.getLogger(__name__)
-
-
-class InfrastructureLogFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        item = {
-            "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
-            "level": record.levelname.lower(),
-            "event": record.getMessage(),
-            "logger": record.name,
-        }
-        for name in ("execution_id", "project_id", "request_id", "error_type", "forced"):
-            if name in record.__dict__:
-                item[name] = record.__dict__[name]
-        return json.dumps(item)
 
 
 class HelperConfig(BaseModel):
@@ -468,9 +454,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     args = parser.parse_args()
-    handler = logging.StreamHandler()
-    handler.setFormatter(InfrastructureLogFormatter())
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    configure_logging()
     config = HelperConfig.model_validate_json(args.config.read_text())
     try:
         asyncio.run(InfrastructureService(config).serve())

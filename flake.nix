@@ -108,16 +108,26 @@
             name = "tokendrain-service";
             nodes.machine = { ... }: {
               imports = [ self.nixosModules.tokendrain ];
+              documentation.enable = false;
               services.tokendrain.enable = true;
               # Service/API smoke test does not boot a nested Firecracker VM.
               services.tokendrain.microvm.guestArtifacts = pkgs.emptyDirectory;
               virtualisation.memorySize = 2048;
             };
             testScript = ''
+              import json
               machine.start()
               machine.wait_for_unit("tokendraind.service")
               machine.wait_for_open_port(8742)
               machine.succeed("curl --fail http://127.0.0.1:8742/healthz")
+              assert json.loads(machine.succeed("tokendrain --json projects")) == []
+              assert json.loads(machine.succeed("tokendrain --json runs")) == []
+              machine.succeed("tokendrain status")
+              assert machine.succeed("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8742/api/v1/projects") == "401"
+              assert '<div id="root">' in machine.succeed("curl --fail http://127.0.0.1:8742/")
+              machine.succeed("test $(stat -c %a /run/tokendrain-auth/master-key) = 600")
+              machine.succeed("systemctl stop tokendraind")
+              assert machine.succeed("systemctl show -p Result --value tokendraind").strip() == "success"
             '';
           };
         }

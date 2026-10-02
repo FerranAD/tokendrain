@@ -200,11 +200,23 @@ in
     '';
     environment.systemPackages = [
       cfg.package
+      cfg.codexPackage
       pkgs.firecracker
       pkgs.iproute2
       pkgs.nftables
       pkgs.e2fsprogs
     ];
+    # Public paths/defaults let the administrative CLI diagnose this deployment
+    # outside the daemon's environment. This file contains no secret values.
+    environment.etc."tokendrain/platform.json".text = builtins.toJSON {
+      state_dir = cfg.stateDirectory;
+      master_key_file =
+        if cfg.masterKeyFile == null then "/var/lib/tokendrain-keys/master.key" else cfg.masterKeyFile;
+      guest_artifacts = toString cfg.microvm.guestArtifacts;
+      helper_socket = "/run/tokendrain/helper.sock";
+      listen_address = cfg.web.listenAddress;
+      port = cfg.web.port;
+    };
     systemd.tmpfiles.rules = [
       "d ${cfg.stateDirectory} 0700 tokendrain tokendrain -"
       "d /var/lib/tokendrain-keys 0700 root root -"
@@ -288,13 +300,16 @@ in
         TOKENDRAIN_STATE_DIR = cfg.stateDirectory;
         TOKENDRAIN_HELPER_SOCKET = "/run/tokendrain/helper.sock";
         TOKENDRAIN_GUEST_ARTIFACTS = toString cfg.microvm.guestArtifacts;
-        TOKENDRAIN_MASTER_KEY_FILE = "%d/master-key";
+        TOKENDRAIN_MASTER_KEY_FILE = "/run/tokendrain-auth/master-key";
         TOKENDRAIN_LISTEN_ADDRESS = cfg.web.listenAddress;
         TOKENDRAIN_PUBLIC_URL = cfg.web.publicUrl;
         TOKENDRAIN_OPENAI_REDIRECT_URI = "http://127.0.0.1:${toString cfg.web.port}/auth/callback";
         TOKENDRAIN_AUTH_RUNTIME_DIR = "/run/tokendrain-auth";
         TOKENDRAIN_PORT = toString cfg.web.port;
         TOKENDRAIN_MAX_CONCURRENCY = toString cfg.concurrency;
+        TOKENDRAIN_CONCURRENCY_LIMIT = toString cfg.concurrency;
+        TOKENDRAIN_VCPUS_LIMIT = toString cfg.microvm.maxVcpus;
+        TOKENDRAIN_MEMORY_MIB_LIMIT = toString cfg.microvm.maxMemoryMiB;
         TOKENDRAIN_DEFAULT_VCPUS = toString cfg.microvm.defaults.vcpus;
         TOKENDRAIN_DEFAULT_MEMORY_MIB = toString cfg.microvm.defaults.memoryMiB;
         TOKENDRAIN_DEFAULT_DISK_GIB = toString cfg.microvm.defaults.diskGiB;
@@ -307,6 +322,9 @@ in
         pkgs.e2fsprogs
       ];
       serviceConfig = {
+        # systemd may expose credentials with group-readable mode under its
+        # protected mount. Copy to a private tmpfs file for the app's 0600 rule.
+        ExecStartPre = "${pkgs.coreutils}/bin/install -m 0600 %d/master-key /run/tokendrain-auth/master-key";
         ExecStart = "${cfg.package}/bin/tokendraind";
         User = "tokendrain";
         Group = "tokendrain";
