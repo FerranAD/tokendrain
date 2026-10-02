@@ -1,0 +1,83 @@
+# Frontend API contract
+
+All paths are under `/api/v1`. JSON responses use bare arrays for lists and objects for detail. IDs are strings. Timestamps are ISO 8601, nullable before start/finish. An error has `detail` (string or FastAPI validation errors). Mutations return the created/updated object except deletes (204 is supported).
+
+Authentication: `POST /session {token}` establishes a same-origin HttpOnly cookie; `DELETE /session` signs out. An unauthenticated request returns 401. All fetch and SSE requests use same-origin credentials. POST/PATCH/DELETE requests are JSON and send `X-Tokendrain-Request: 1` as a CSRF defense in addition to server Origin validation.
+
+`GET /events` is SSE. Default-message data is JSON with a `type`, optional `project_id`, `run_id`, `execution_id`, `message`, `timestamp`. Any message invalidates displayed API data (coalesced); `execution.log` messages also append to the live run log. Server must replay events with Last-Event-ID if supported. UI shows connection status and manually refreshes on reconnect.
+
+## Projects
+
+- `GET /projects` → `Project[]`
+- `POST /projects {name,description,default_model?,default_reasoning_effort?}`
+- `GET /projects/{id}` → `Project`
+- `PATCH /projects/{id}` accepts `name,description,task_log,next_run_feedback,default_model,default_reasoning_effort`
+- `DELETE /projects/{id}` rejects active projects
+- `GET /projects/{id}/executions` → `Execution[]`
+- `GET /projects/{id}/storage` → `{environment:{size_bytes,used_bytes,path?},workspace:{size_bytes,used_bytes,path?}}`
+- `GET /projects/{id}/snapshots` → `Snapshot[]`
+- `POST /projects/{id}/snapshots {name}`
+- `POST /projects/{id}/snapshots/{snapshot_id}/restore {scope:"workspace"|"environment"|"all"}`
+- `DELETE /projects/{id}/snapshots/{snapshot_id}`
+- `POST /projects/{id}/environment/reset {}`
+- `POST /projects/{id}/storage/resize {scope:"workspace"|"environment",size_gib:number}`
+
+Project: `{id,name,description,task_log,next_run_feedback,status,default_model,default_reasoning_effort,created_at,updated_at,last_run_at?,latest_report?:Report,environment_metadata?,workspace_metadata?}`. Empty model means provider default. Snapshot: `{id,name,created_at,environment_bytes?,workspace_bytes?}`.
+
+## Runs, limits, models
+
+- `GET /runs` → `Run[]`
+- `POST /runs RunTemplate` → `Run`
+- `GET /runs/{id}` → `Run` (includes executions)
+- `POST /runs/{id}/cancel {}`
+- `GET /runs/{id}/events` → `Event[]` (bounded initial persisted log; SSE supplies updates)
+- `GET /usage` → `UsageWindow[]`
+- `GET /auth/openai/models` → `Model[]`
+
+RunTemplate: `{projects:[{project_id,model,reasoning_effort}],stop_conditions:[{kind:"usage",window_minutes:number,used_percent:number,limit_id?:string}|{kind:"elapsed",seconds:number}|{kind:"provider_limit"}|{kind:"project_completed"}],parallel:boolean}`. Stop conditions use ANY semantics. Runtime and usage limits are optional; provider limit and completion are natural stopping conditions.
+
+Run: `{id,status,created_at,started_at?,finished_at?,parallel,stop_conditions,executions:Execution[]}`.
+Execution: `{id,project_id,project_name?,run_id,status,model,reasoning_effort,started_at?,finished_at?,error?,report?:Report,thread_id?}`.
+UsageWindow: `{limit_id,name?,used_percent,window_minutes?,resets_at?,observed_at?}`. Names/window durations come from provider; UI never assumes primary or secondary semantics.
+Model: `{id,name?,reasoning_efforts?:string[],is_default?:boolean}`. If model discovery is unavailable, UI permits entering a model manually.
+Report: `{status,summary,completed:string[],remaining:string[],blockers:string[],changes?:{files_changed:number,insertions:number,deletions:number,commits?:string[]},suggested_next_action?,task_log?,usage?:{start:UsageWindow[],end:UsageWindow[]}}`.
+Event: `{id?,type,message?,timestamp?,execution_id?,run_id?,project_id?,data?}`.
+
+## Schedules
+
+- `GET /schedules` → `Schedule[]`
+- `POST /schedules {name,cron,timezone,enabled,run_template:RunTemplate}`
+- `PATCH /schedules/{id}` accepts same fields
+- `DELETE /schedules/{id}`
+
+Schedule: `{id,name,cron,timezone,enabled,run_template,next_run_at?,last_run_at?}`.
+
+## OpenAI / system
+
+- `GET /auth/openai` → `{connected,method?:"chatgpt"|"import",account_label?,login?:{id,url,status,error?}}`
+- `POST /auth/openai/login {}` → `{id,url}` (host Codex supported login flow)
+- `POST /auth/openai/import {auth_json:object}`
+- `DELETE /auth/openai`
+- `GET /system` → `{version,backend,concurrency,vm_defaults:{vcpus,memory_mib,disk_gib},checks:[{name,ok,message}],uptime_seconds?,active_executions?}`
+- `PATCH /system {concurrency,vm_defaults:{vcpus,memory_mib,disk_gib}}`
+
+## GitHub
+
+- `GET /integrations/github` → `{configured,app_id?,app_slug?,installation_url?,installations:Installation[]}`
+- `PUT /integrations/github {app_id,private_key,app_slug?}`
+- `POST /integrations/github/sync {}`
+- `GET /integrations/github/installations/{id}/repositories` → `Repository[]`
+- `GET /projects/{id}/github` → `ProjectGitHub|null`
+- `PUT /projects/{id}/github {installation_id,repository_id,repository_name,permissions:{contents:"read"|"write",pull_requests?:"read"|"write",issues?:"read"|"write",actions?:"read"}}`
+- `DELETE /projects/{id}/github`
+
+Installation: `{id,account,permissions?:Record<string,string>}`. Repository: `{id,full_name,private?,default_branch?}`. ProjectGitHub is the PUT body.
+
+## Generic secrets
+
+- `GET /projects/{id}/secrets` → `Secret[]` (never values)
+- `PUT /projects/{id}/secrets/{name} {value?,description}` (missing value preserves existing value)
+- `DELETE /projects/{id}/secrets/{name}`
+- `POST /projects/{id}/secrets/import {dotenv,descriptions:Record<string,string>}` (UI asks for per-variable descriptions before submission; malformed dotenv is rejected by server)
+
+Secret: `{name,description,updated_at?}`.
