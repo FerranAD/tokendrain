@@ -1,0 +1,127 @@
+{
+  description = "Persistent projects and disposable autonomous Codex microVMs";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    microvm.url = "github:microvm-nix/microvm.nix";
+    microvm.inputs.nixpkgs.follows = "nixpkgs";
+  };
+  outputs =
+    inputs@{
+      self,
+      nixpkgs,
+      microvm,
+      ...
+    }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      eachSystem = nixpkgs.lib.genAttrs systems;
+      mkGuest =
+        system:
+        nixpkgs.lib.nixosSystem {
+          inherit system;
+          specialArgs.tokendrainPackage = self.packages.${system}.tokendrain-guestd;
+          modules = [
+            microvm.nixosModules.microvm
+            ./nix/guest.nix
+          ];
+        };
+    in
+    {
+      packages = eachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          app = pkgs.callPackage ./nix/package.nix { };
+          web = pkgs.callPackage ./nix/web.nix { };
+          guest = mkGuest system;
+        in
+        {
+          tokendrain = app.overrideAttrs (old: {
+            postInstall = (old.postInstall or "") + ''
+              mkdir -p $out/share/tokendrain
+              ln -s ${web} $out/share/tokendrain/web
+            '';
+          });
+          tokendrain-guestd = app;
+          guest-artifacts = pkgs.callPackage ./nix/guest-artifacts.nix { inherit guest; };
+          inherit web;
+          default = self.packages.${system}.tokendrain;
+        }
+      );
+      nixosModules.tokendrain = { pkgs, lib, ... }: {
+        imports = [ ./modules/tokendrain.nix ];
+        services.tokendrain.codexPackage =
+          lib.mkDefault
+            nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system}.codex;
+        services.tokendrain.package =
+          lib.mkDefault
+            self.packages.${pkgs.stdenv.hostPlatform.system}.tokendrain;
+        services.tokendrain.microvm.guestArtifacts =
+          lib.mkDefault
+            self.packages.${pkgs.stdenv.hostPlatform.system}.guest-artifacts;
+      };
+      devShells = eachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              python312
+              uv
+              ruff
+              mypy
+              nodejs_22
+              git
+              firecracker
+              e2fsprogs
+              iproute2
+              nftables
+              curl
+              jq
+              nixfmt
+            ];
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
+            shellHook = ''
+              export UV_PYTHON=${pkgs.python312}/bin/python3
+            '';
+          };
+        }
+      );
+      checks = eachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          package = self.packages.${system}.tokendrain;
+          firecracker = import ./nix/tests/firecracker.nix {
+            inherit pkgs;
+            tokendrainModule = self.nixosModules.tokendrain;
+            guestArtifacts = self.packages.${system}.guest-artifacts;
+          };
+          module = pkgs.testers.runNixOSTest {
+            name = "tokendrain-service";
+            nodes.machine = { ... }: {
+              imports = [ self.nixosModules.tokendrain ];
+              services.tokendrain.enable = true;
+              # Service/API smoke test does not boot a nested Firecracker VM.
+              services.tokendrain.microvm.guestArtifacts = pkgs.emptyDirectory;
+              virtualisation.memorySize = 2048;
+            };
+            testScript = ''
+              machine.start()
+              machine.wait_for_unit("tokendraind.service")
+              machine.wait_for_open_port(8742)
+              machine.succeed("curl --fail http://127.0.0.1:8742/healthz")
+            '';
+          };
+        }
+      );
+      formatter = eachSystem (system: nixpkgs.legacyPackages.${system}.nixfmt);
+    };
+}
