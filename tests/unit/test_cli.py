@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from tokendrain.cli.admin import execute, local_url, parser, platform_settings, read_token
-from tokendrain.cli.daemon import main as daemon_main
+from tokendrain.cli.daemon import make_server, supervise
 from tokendrain.config import Settings
 from tokendrain.credentials.store import SecretRedactor
 from tokendrain.doctor import inspect_database
@@ -126,24 +129,51 @@ def test_structured_logs_redact_values_queries_and_exception_text() -> None:
         assert secret not in result
 
 
-def test_daemon_uses_single_worker_and_disables_access_logs(
-    monkeypatch: pytest.MonkeyPatch,
+def test_daemon_uses_single_worker_and_disables_access_logs() -> None:
+    server = make_server(FastAPI(), Settings(port=9876))
+    assert server.config.port == 9876
+    assert server.config.workers == 1
+    assert server.config.access_log is False
+    assert server.config.log_config is None
+    assert server.config.timeout_graceful_shutdown == 5
+
+
+@pytest.mark.parametrize("background_failure", [True, False])
+async def test_background_failure_exits_nonzero_after_lifespan_cleanup(
+    background_failure: bool,
 ) -> None:
-    captured: dict[str, object] = {}
+    app = FastAPI()
+    released = asyncio.Event()
 
-    def run(app: str, **kwargs: object) -> None:
-        captured.update(app=app, **kwargs)
+    async def background() -> None:
+        if background_failure:
+            await asyncio.sleep(0.01)
+            raise RuntimeError("worker failed")
+        await asyncio.Event().wait()
 
-    monkeypatch.setattr("tokendrain.cli.daemon.uvicorn.run", run)
-    monkeypatch.setattr("tokendrain.cli.daemon.configure_logging", lambda level: None)
-    monkeypatch.setenv("TOKENDRAIN_PORT", "9876")
-    daemon_main([])
-    assert captured["app"] == "tokendrain.api.app:create_app"
-    assert captured["port"] == 9876
-    assert captured["workers"] == 1
-    assert captured["access_log"] is False
-    assert captured["log_config"] is None
-    assert captured["factory"] is True
+    worker = asyncio.create_task(background())
+    app.state.services = SimpleNamespace(task=worker)
+
+    class Server:
+        started = False
+        should_exit = False
+
+        async def serve(self) -> None:
+            self.started = True
+            try:
+                if not background_failure:
+                    await asyncio.sleep(0.02)
+                    self.should_exit = True
+                while not self.should_exit:  # noqa: ASYNC110 - emulate Uvicorn's public flag
+                    await asyncio.sleep(0.001)
+            finally:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+                released.set()
+
+    assert await supervise(Server(), app, 1) == int(background_failure)
+    assert released.is_set()
+    assert worker.done()
 
 
 def test_uvicorn_preformatted_traceback_drops_exception_values() -> None:

@@ -143,3 +143,18 @@ Remaining cross-component validation:
   resource caps and the full CLI integration test. Nix's packaged Python suite
   passed 93 tests, with one local-Codex skip and one separately exercised KVM
   deselection. All 12 focused CLI tests pass; Ruff/mypy pass for owned sources.
+
+## Final production audit
+
+Read-only host/API audit found and reported a Run-admission race during project
+removal, a cancellable encrypted-credential worker ordering race (reproduced
+using a temporary test account), and guest shutdown exceptions hidden from the
+supervisor. Root/guest agents own those corrections and regression tests.
+
+The daemon now supervises Uvicorn and the application's background TaskGroup:
+when a background service unexpectedly exits, HTTP shuts down through lifespan
+cleanup and the process exits nonzero so systemd can restart it. Normal signals
+remain successful stops. HTTP draining is limited to five seconds so live SSE
+streams cannot consume the separate VM cleanup budget. Unit regressions cover
+unexpected worker failure and normal cancellation; the subprocess integration
+continues to verify actual HTTP and SIGTERM behavior.
