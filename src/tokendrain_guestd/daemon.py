@@ -450,30 +450,53 @@ async def serve(args: argparse.Namespace) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, daemon.shutdown_requested.set)
     try:
-        async with server:
-            await daemon.shutdown_requested.wait()
-            if daemon.host:
-                # The shutdown method wakes this owner before its RPC reply is
-                # serialized; drain accepted requests before closing transport.
-                with contextlib.suppress(Exception):
-                    async with asyncio.timeout(5):
-                        await daemon.host.drain_requests()
+        await daemon.shutdown_requested.wait()
+        if daemon.host:
+            # The shutdown method wakes this owner before its RPC reply is
+            # serialized; drain accepted requests before closing transport.
+            with contextlib.suppress(Exception):
+                async with asyncio.timeout(5):
+                    await daemon.host.drain_requests()
     finally:
-        await daemon.stop_codex()
+        # Python 3.12 Server.wait_closed also waits for accepted transports.
+        # Close the listener first, then clients, before awaiting server closure.
+        server.close()
         if daemon.host:
             await daemon.host.close()
-        for task in connections:
-            task.cancel()
-        await asyncio.gather(*tuple(connections), return_exceptions=True)
+        active_connections = tuple(connections)
+        try:
+            async with asyncio.timeout(20):
+                await asyncio.gather(*active_connections, return_exceptions=True)
+        except TimeoutError:
+            for task in active_connections:
+                task.cancel()
+            await asyncio.gather(*active_connections, return_exceptions=True)
+        await daemon.stop_codex()
+        async with asyncio.timeout(5):
+            await server.wait_closed()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(sig)
         if args.poweroff_on_shutdown:
+            # Firecracker x86 has no ACPI poweroff; reboot=k makes a graceful
+            # Linux reboot terminate the VMM. ARM also exits on guest reboot.
             process = await asyncio.create_subprocess_exec(
                 "systemctl",
                 "--no-block",
-                "poweroff",
+                "reboot",
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(process.wait(), 10)
+            try:
+                _, stderr = await asyncio.wait_for(process.communicate(), 10)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+                raise
+            if process.returncode:
+                raise RuntimeError(
+                    "guest systemd shutdown request failed: "
+                    + stderr.decode(errors="replace")[:1000]
+                )
 
 
 def main() -> None:

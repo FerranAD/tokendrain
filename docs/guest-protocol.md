@@ -114,8 +114,11 @@ clears guestd-managed runtime files. All secret paths live under the guest tmpfs
 `/run/tokendrain`. Normal shutdown terminates the app-server process group,
 removes runtime files, and closes the connection. Production NixOS enables `--poweroff-on-shutdown`: after the shutdown RPC reply
 is delivered and processes are cleaned up, guestd requests
-`systemctl --no-block poweroff`. This flushes filesystems before the host detaches
-persistent disks. The option is off for local protocol tests.
+`systemctl --no-block reboot`. The guest kernel uses `reboot=k`: Firecracker
+intercepts this reboot and exits after Linux flushes filesystems. On x86, ordinary
+`poweroff` only halts Linux and leaves Firecracker alive because the VM has no
+ACPI power management. See the [Firecracker shutdown FAQ](https://github.com/firecracker-microvm/firecracker/blob/main/FAQ.md#how-can-i-gracefully-reboot-the-guest-how-can-i-gracefully-poweroff-the-guest).
+The flag retains its historical name. The option is off for local protocol tests.
 
 The guest itself is untrusted and unrestricted. Log redaction replaces known
 secret values but cannot detect arbitrary encodings. An agent can deliberately

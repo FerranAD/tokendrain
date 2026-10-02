@@ -87,3 +87,20 @@ and refresh lock; default account selection skips signed-out accounts. Import
 rejects other auth modes with stray tokens, callback userinfo is rejected, and
 model probing uses the actual model slug when a catalog ID differs. Added two
 regression tests; 15 affected auth/probe tests pass, Ruff/mypy clean.
+
+## Real KVM shutdown fixes
+
+Infrastructure tests exposed two shutdown issues, now fixed:
+
+- Python 3.12 `Server.wait_closed()` waits for accepted transports. Guestd now
+  closes its listener and host session and awaits connection cleanup before
+  waiting for server closure, preventing a shutdown deadlock with an open client.
+- Firecracker x86 cannot receive ACPI poweroff. Guestd now requests
+  `systemctl --no-block reboot`; `reboot=k` makes Firecracker terminate after
+  clean filesystem shutdown (also supported on ARM). The existing flag remains
+  compatible. Failed systemctl requests surface their error.
+
+A full guestd subprocess test leaves its host connection open after the shutdown
+response and verifies process exit plus the exact reboot invocation using a
+harmless systemctl fixture. Six guest tests, Ruff, and strict mypy pass. The
+infrastructure agent is rebuilding artifacts for real KVM confirmation.

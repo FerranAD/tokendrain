@@ -164,3 +164,64 @@ def test_redaction_preserves_json_structure(tmp_path: Path) -> None:
     redacted = guest._redact_event(original)
     assert redacted == {"method": "event", "text": "[REDACTED]", "nested": ["[REDACTED]", 5]}
     assert json.loads(json.dumps(redacted)) == redacted
+
+
+async def test_guest_shutdown_closes_live_connection_before_server_wait(
+    tmp_path: Path,
+) -> None:
+    """Exercise the complete guest process; systemctl is a harmless local fixture."""
+    import os
+
+    from tokendrain.protocol import FramedPeer
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    systemctl = bin_dir / "systemctl"
+    called = tmp_path / "systemctl-called"
+    systemctl.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(called)!r}).write_text(' '.join(sys.argv[1:]))\n"
+    )
+    systemctl.chmod(0o700)
+    socket_path = tmp_path / "guest.sock"
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "tokendrain_guestd.main",
+        "--unix-socket",
+        str(socket_path),
+        "--runtime-dir",
+        str(tmp_path / "runtime"),
+        "--codex-home",
+        str(tmp_path / "codex"),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--poweroff-on-shutdown",
+        env={**os.environ, "PATH": str(bin_dir)},
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    peer = None
+    try:
+        async with asyncio.timeout(5):
+            while True:
+                try:
+                    reader, writer = await asyncio.open_unix_connection(socket_path)
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    await asyncio.sleep(0.01)
+        peer = FramedPeer(reader, writer)
+        await peer.start()
+        assert await peer.request("shutdown") == {}
+        # Deliberately leave the client connection open. The server must close
+        # it itself, not wait indefinitely for its caller to close first.
+        _, stderr = await asyncio.wait_for(process.communicate(), 5)
+        assert process.returncode == 0, stderr.decode()
+        assert called.read_text() == "--no-block reboot"
+    finally:
+        if peer:
+            await peer.close()
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
