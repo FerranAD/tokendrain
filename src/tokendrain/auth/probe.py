@@ -34,7 +34,7 @@ class AccountProbeResult(BaseModel):
 
 
 def parse_model(model: dict[str, Any], *, siwc: bool = False) -> ModelChoice:
-    identifier = str(model["slug"] if siwc else model["id"])
+    identifier = str(model["slug"] if siwc else model.get("model", model["id"]))
     efforts = (
         model.get("supported_reasoning_levels", [])
         if siwc

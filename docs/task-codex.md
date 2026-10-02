@@ -80,3 +80,10 @@ Remaining external validation: user-configured live OpenAI sign-in, account
 entitlements, real token refresh and provider usage responses. No implementation
 agent credentials were read or reused. Integrated full KVM persistence test is
 owned by the infrastructure agent.
+
+Authentication follow-up: returning authorization now serializes its final write
+with refresh; duplicate imported account/workspace records reuse one account ID
+and refresh lock; default account selection skips signed-out accounts. Import
+rejects other auth modes with stray tokens, callback userinfo is rejected, and
+model probing uses the actual model slug when a catalog ID differs. Added two
+regression tests; 15 affected auth/probe tests pass, Ruff/mypy clean.

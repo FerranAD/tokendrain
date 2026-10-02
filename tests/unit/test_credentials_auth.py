@@ -300,3 +300,41 @@ async def test_signout_clears_local_tokens_after_remote_failure(
         assert signed_out.access_token == signed_out.refresh_token == signed_out.id_token == ""
         with pytest.raises(ValueError, match="signed out"):
             await manager.runtime_credentials("account")
+
+
+async def test_reimport_deduplicates_account_refresh_ownership(
+    store: EncryptedFileCredentialStore,
+) -> None:
+    token = jwt.encode(
+        {
+            "exp": time.time() + 3600,
+            "https://api.openai.com/auth": {"chatgpt_account_id": "workspace"},
+        },
+        "x" * 32,
+    )
+    raw = json.dumps(
+        {"auth_mode": "chatgpt", "tokens": {"access_token": token, "refresh_token": "refresh"}}
+    ).encode()
+    async with httpx.AsyncClient() as http:
+        manager = OpenAIAuthManager(store, http, "host")
+        accounts = await asyncio.gather(*(manager.import_auth_json(raw) for _ in range(5)))
+        assert len({account.id for account in accounts}) == 1
+        assert len(await manager.accounts()) == 1
+
+
+async def test_default_runtime_account_skips_signed_out_accounts(
+    store: EncryptedFileCredentialStore,
+) -> None:
+    for name, connected in [("a", False), ("b", True)]:
+        record = AccountRecord(
+            id=name,
+            method="siwc",
+            subject=name,
+            access_token=name,
+            expires_at=time.time() + 3600,
+            connected=connected,
+        )
+        await store.put(f"openai-{name}", record.model_dump_json().encode())
+    async with httpx.AsyncClient() as http:
+        manager = OpenAIAuthManager(store, http, "host")
+        assert (await manager.runtime_credentials()).access_token == "b"

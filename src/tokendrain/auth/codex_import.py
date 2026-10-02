@@ -25,6 +25,8 @@ def decode_import(raw: bytes) -> dict[str, Any]:
         raise ValueError(
             "expected Codex ChatGPT auth.json with tokens; API keys are not a ChatGPT usage account"
         )
+    if data.get("auth_mode") not in {None, "chatgpt"} or data.get("OPENAI_API_KEY"):
+        raise ValueError("import requires a managed ChatGPT login, not another Codex auth mode")
     tokens = data["tokens"]
     access_token = tokens.get("access_token")
     if not isinstance(access_token, str) or not access_token:

@@ -91,6 +91,7 @@ class OpenAIAuthManager:
         self.runtime_dir = runtime_dir
         self._locks: dict[str, asyncio.Lock] = {}
         self._pending_lock = asyncio.Lock()
+        self._import_lock = asyncio.Lock()
 
     async def _load(self, account_id: str) -> AccountRecord:
         data = await self.store.get(f"openai-{account_id}")
@@ -118,6 +119,8 @@ class OpenAIAuthManager:
             or uri.path != "/auth/callback"
             or uri.query
             or uri.fragment
+            or uri.username is not None
+            or uri.password is not None
         ):
             raise ValueError(
                 "SIWC requires http://127.0.0.1:<port>/auth/callback; "
@@ -259,22 +262,36 @@ class OpenAIAuthManager:
             scopes=scopes,
             expires_at=time.time() + float(tokens["expires_in"]),
         )
-        await self._save(account)
+        async with self._locks.setdefault(account.id, asyncio.Lock()):
+            await self._save(account)
         return AccountInfo(**account.model_dump())
 
     async def import_auth_json(self, raw: bytes) -> AccountInfo:
         from .codex_import import decode_import
 
         decoded = decode_import(raw)
-        account = AccountRecord(id=str(uuid.uuid4()), method="import", **decoded)
-        await self._save(account)
-        return AccountInfo(**account.model_dump())
+        async with self._import_lock:
+            account_id = str(uuid.uuid4())
+            for existing in await self.accounts():
+                if existing.method != "import":
+                    continue
+                record = await self._load(existing.id)
+                if (
+                    record.subject == decoded["subject"]
+                    and record.chatgpt_account_id == decoded["chatgpt_account_id"]
+                ):
+                    account_id = existing.id
+                    break
+            account = AccountRecord(id=account_id, method="import", **decoded)
+            async with self._locks.setdefault(account.id, asyncio.Lock()):
+                await self._save(account)
+            return AccountInfo(**account.model_dump())
 
     async def runtime_credentials(
         self, account_id: str | None = None, force_refresh: bool = False
     ) -> RuntimeCredentials:
         if account_id is None:
-            accounts = await self.accounts()
+            accounts = [account for account in await self.accounts() if account.connected]
             if not accounts:
                 raise ValueError("connect an OpenAI account first")
             account_id = accounts[0].id
