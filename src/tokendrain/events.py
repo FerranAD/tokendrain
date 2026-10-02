@@ -72,6 +72,7 @@ class EventBus:
                 if not rows:
                     try:
                         await asyncio.wait_for(self.changed.wait(), 15)
+                        continue
                     except TimeoutError:
                         pass
             if not rows:

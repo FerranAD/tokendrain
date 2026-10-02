@@ -138,6 +138,7 @@ class RunService:
             schedule_id=schedule_id,
             scheduled_for=scheduled_for,
         )
+        pending: list[ProjectExecution] = []
         for config in template.projects:
             project = await db.get(Project, config.project_id)
             if not project:
@@ -154,7 +155,7 @@ class RunService:
                 raise ValueError(
                     f"Project {project.name} already has an active or queued execution"
                 )
-            db.add(
+            pending.append(
                 ProjectExecution(
                     run_id=run.id,
                     project_id=project.id,
@@ -164,6 +165,8 @@ class RunService:
             )
         db.add(run)
         try:
+            await db.flush()
+            db.add_all(pending)
             await db.flush()
         except IntegrityError as error:
             raise ValueError("A project is already reserved by another Run") from error

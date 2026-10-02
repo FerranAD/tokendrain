@@ -42,3 +42,23 @@ first, then complete host/API/CLI and frontend entrypoint, integrate, test and d
 Checkpoint commit attempted but `.git/index.lock` creation failed: `.git` is mounted
 read-only in this session. All source and handoff files are saved in the working tree;
 no commit was created. Resume session can commit if Git metadata becomes writable.
+
+## Resumed implementation milestones
+
+- KVM API 12 and CREATE_VM work; TUN accessible in restarted session. Git writes work.
+- Committed domain/migration/supervisor foundations as 7704452.
+- Guest/Auth committed with current SIWC, Codex protocol and token refresh tests.
+  Actual installed Codex smoke caught/fixed thread sandbox enum spelling.
+- Frontend complete: strict TypeScript, Vite build and nine Chromium tests pass.
+- Real Firecracker tests pass: fresh boots, vsock, persistent workspace/home/Nix state.
+- Nested NixOS tests pass for two concurrent VMs, privileged helper, public egress,
+  host/private/public-LAN/interguest blocking, firewall reloads, route changes,
+  crash reconciliation and graceful shutdown. No privileged host configuration modified.
+- Host API implemented: session authentication, CSRF/Host protection, CRUD, runs,
+  schedules, storage, secrets, OpenAI and GitHub setup, system settings, replayable SSE.
+- Ten new host integration tests pass (API, migrations, scoped GitHub token locking).
+- Full NixOS module HTTP smoke passes: packaged UI, authenticated CLI/API, migrations,
+  helper readiness, runtime credential permissions and clean service stop.
+- Remaining: run-supervisor edge tests/recovery fixes, live browser against actual API,
+  final app security review and complete quality gates. Live OAuth/inference/GitHub
+  credential verification remains external; no implementation-session secrets are reused.

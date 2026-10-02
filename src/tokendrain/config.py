@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,11 +16,15 @@ class Settings(BaseSettings):
     helper_socket: Path = Path("/run/tokendrain/helper.sock")
     guest_artifacts: Path | None = None
     web_dir: Path | None = None
-    backend: str = "firecracker"
-    default_vcpus: int = Field(default=4, ge=1, le=64)
-    default_memory_mib: int = Field(default=4096, ge=256, le=1048576)
+    backend: Literal["firecracker", "mock"] = "firecracker"
+    auth_runtime_dir: Path = Path("/run/tokendrain-auth")
+    default_vcpus: int = Field(default=4, ge=1, le=32)
+    default_memory_mib: int = Field(default=4096, ge=512, le=131072)
     default_disk_gib: int = Field(default=40, ge=1, le=4096)
     max_concurrency: int = Field(default=2, ge=1, le=64)
+    concurrency_limit: int = Field(default=64, ge=1, le=128)
+    vcpus_limit: int = Field(default=32, ge=1, le=32)
+    memory_mib_limit: int = Field(default=131072, ge=512, le=131072)
     turn_timeout_seconds: int = Field(default=7200, ge=60)
     shutdown_timeout_seconds: int = Field(default=60, ge=1)
     scheduler_interval_seconds: float = Field(default=10, ge=0.1)
