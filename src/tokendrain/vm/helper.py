@@ -23,8 +23,9 @@ from typing import Any, Literal
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from tokendrain.doctor import inspect_vm_checks
 from tokendrain.logging import configure_logging
 from tokendrain.networking.linux import LinuxNetwork, NetworkAllocation, allocation
 from tokendrain.storage.files import atomic_json, durable_io
@@ -53,8 +54,14 @@ class Request(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: Literal[1]
     id: str = Field(max_length=64)
-    operation: Literal["start", "stop", "list"]
+    operation: Literal["start", "stop", "list", "diagnostics"]
     payload: dict[str, Any]
+
+    @model_validator(mode="after")
+    def diagnostics_has_no_arguments(self) -> Request:
+        if self.operation == "diagnostics" and self.payload:
+            raise ValueError("diagnostics does not accept arguments")
+        return self
 
 
 class Record(BaseModel):
@@ -348,6 +355,18 @@ class InfrastructureService:
         logger.info("vm_stopped", extra={"execution_id": key, "forced": forced})
 
     async def dispatch(self, request: Request) -> object:
+        if request.operation == "diagnostics":
+            # These probes neither create nor reconcile resources, and need not
+            # wait for a slow VM boot or shutdown holding the lifecycle lock.
+            if request.payload:
+                raise ValueError("diagnostics does not accept arguments")
+            checks = await asyncio.to_thread(
+                inspect_vm_checks,
+                self.config.guest_artifacts,
+                self.config.firecracker,
+                scope="helper",
+            )
+            return [check.model_dump(mode="json") for check in checks]
         async with self._lock:
             if request.operation == "start":
                 return (await self.start(VmSpec.model_validate(request.payload))).model_dump(

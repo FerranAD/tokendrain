@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from tokendrain.credentials.store import SecretRedactor
+from tokendrain.doctor import DoctorCheck
 from tokendrain.domain import RunReport, UsageWindow
 from tokendrain.orchestration.driver import LogCallback, TokenCallback, UsageCallback, WorkSession
 from tokendrain.storage.files import FileProjectStorage
@@ -30,6 +31,16 @@ class MockStorage(FileProjectStorage):
 class MockVmBackend:
     def __init__(self) -> None:
         self.handles: dict[str, VmHandle] = {}
+
+    async def diagnostics(self) -> list[DoctorCheck]:
+        return [
+            DoctorCheck(
+                name="mock_backend",
+                ok=True,
+                message="Simulation only; VM infrastructure is not exercised",
+                scope="mock",
+            )
+        ]
 
     async def start(self, spec: VmSpec) -> VmHandle:
         handle = VmHandle(

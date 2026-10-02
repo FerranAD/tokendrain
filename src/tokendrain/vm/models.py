@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from tokendrain.doctor import DoctorCheck
+
 
 class VmSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -28,6 +30,7 @@ class VmHandle(BaseModel):
 
 
 class VmBackend(Protocol):
+    async def diagnostics(self) -> list[DoctorCheck]: ...
     async def start(self, spec: VmSpec) -> VmHandle: ...
     async def stop(self, handle: VmHandle) -> None: ...
     async def reconcile(self) -> list[VmHandle]: ...
