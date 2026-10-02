@@ -104,3 +104,12 @@ A full guestd subprocess test leaves its host connection open after the shutdown
 response and verifies process exit plus the exact reboot invocation using a
 harmless systemctl fixture. Six guest tests, Ruff, and strict mypy pass. The
 infrastructure agent is rebuilding artifacts for real KVM confirmation.
+
+## Host orchestration integration
+
+The parent delegated driver/supervisor and domain/scheduler reliability work.
+See task-orchestration.md. Focused validation now includes 55 passing tests,
+strict mypy across 16 modules, and Ruff. Host reports use a strict provider schema;
+recovery reads/resumes persisted state without replaying side-effecting turns.
+Runtime-account selection excludes signed-out registrations. Notifications are
+bounded to 256 queued events and 16 MiB; turn report text is bounded to 8 MiB.

@@ -399,7 +399,7 @@ class GuestDaemon:
         raise RpcError(-32601, "unknown guest operation")
 
     async def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        if self.host and not self.host.closed.is_set():
+        if self.host is not None:
             writer.close()
             await writer.wait_closed()
             return

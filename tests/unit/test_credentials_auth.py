@@ -338,3 +338,10 @@ async def test_default_runtime_account_skips_signed_out_accounts(
     async with httpx.AsyncClient() as http:
         manager = OpenAIAuthManager(store, http, "host")
         assert (await manager.runtime_credentials()).access_token == "b"
+
+
+def test_redaction_covers_json_embedded_secret_values() -> None:
+    secret = 'private"value\nline'
+    redactor = SecretRedactor([secret])
+    encoded = json.dumps({"summary": secret})
+    assert redactor.redact(encoded) == '{"summary": "[REDACTED]"}'

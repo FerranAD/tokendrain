@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -20,6 +21,45 @@ JsonObject = dict[str, Any]
 class RpcNotification(BaseModel):
     method: str
     params: JsonObject = Field(default_factory=dict)
+
+
+class NotificationQueue(asyncio.Queue[RpcNotification]):
+    """Bound queued memory as well as event count for untrusted guest traffic."""
+
+    def __init__(self, max_bytes: int = 16 * 1024 * 1024) -> None:
+        super().__init__(maxsize=256)
+        self.max_bytes = max_bytes
+        self.queued_bytes = 0
+        self._sizes: deque[int] = deque()
+        self._space = asyncio.Event()
+
+    async def put(self, item: RpcNotification) -> None:
+        size = len(item.model_dump_json().encode())
+        if size > self.max_bytes:
+            raise ValueError("notification exceeds queue byte limit")
+        while True:
+            self._space.clear()
+            if not self.full() and self.queued_bytes + size <= self.max_bytes:
+                self.put_nowait(item)
+                return
+            await self._space.wait()
+
+    def put_nowait(self, item: RpcNotification) -> None:
+        size = len(item.model_dump_json().encode())
+        if self.queued_bytes + size > self.max_bytes:
+            raise asyncio.QueueFull
+        super().put_nowait(item)
+
+    def _put(self, item: RpcNotification) -> None:
+        self._sizes.append(len(item.model_dump_json().encode()))
+        self.queued_bytes += self._sizes[-1]
+        super()._put(item)
+
+    def _get(self) -> RpcNotification:
+        item = super()._get()
+        self.queued_bytes -= self._sizes.popleft()
+        self._space.set()
+        return item
 
 
 class RpcError(Exception):
@@ -40,7 +80,7 @@ class JsonRpcPeer:
         self.reader, self.writer = reader, writer
         self.timeout = timeout
         self.request_handler = request_handler
-        self.notifications: asyncio.Queue[RpcNotification] = asyncio.Queue(maxsize=4096)
+        self.notifications: asyncio.Queue[RpcNotification] = NotificationQueue()
         self._pending: dict[int, asyncio.Future[JsonObject]] = {}
         self._counter = 0
         self._write_lock = asyncio.Lock()

@@ -67,8 +67,8 @@ class Boundary(BaseModel):
 class UsageWindow(BaseModel):
     limit_id: str
     name: str | None = None
-    used_percent: float
-    window_minutes: int | None = None
+    used_percent: float = Field(ge=0, allow_inf_nan=False)
+    window_minutes: int | None = Field(default=None, gt=0)
     resets_at: datetime | None = None
     observed_at: datetime = Field(default_factory=utcnow)
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -155,7 +155,10 @@ class ScheduleInput(Boundary):
     @field_validator("timezone")
     @classmethod
     def valid_zone(cls, value: str) -> str:
-        ZoneInfo(value)
+        try:
+            ZoneInfo(value)
+        except (KeyError, ValueError) as error:
+            raise ValueError("Unknown IANA timezone") from error
         return value
 
     @field_validator("cron")

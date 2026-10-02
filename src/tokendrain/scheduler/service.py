@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -18,20 +18,32 @@ log = logging.getLogger(__name__)
 
 
 def next_occurrence(expression: str, timezone: str, after: datetime) -> datetime:
-    # Iterate UTC minutes, matching local calendar fields. This skips nonexistent local
-    # times and deliberately fires twice for a repeated DST hour (each is a unique instant).
+    # Generate naive calendar candidates, then validate their timezone roundtrip.
+    # croniter's aware-time match can accept phantom times in a spring gap.
     if after.tzinfo is None:
         after = after.replace(tzinfo=UTC)
+    after = after.astimezone(UTC)
     zone = ZoneInfo(timezone)
-    # croniter's timezone-aware iterator handles ordinary cases efficiently; validate its
-    # wall-clock candidate to discard phantom spring-forward times.
-    candidate = croniter(expression, after.astimezone(zone)).get_next(datetime)
-    for _ in range(10):
-        normalized = candidate.astimezone(UTC).astimezone(zone)
-        if croniter.match(expression, normalized) and normalized.astimezone(UTC) > after:
-            return normalized.astimezone(UTC)
-        candidate = croniter(expression, candidate).get_next(datetime)
-    raise ValueError("Cannot find valid timezone-aware cron occurrence")
+    local = after.astimezone(zone)
+    wall = local.replace(tzinfo=None)
+    offset = local.utcoffset() or timedelta()
+    future_offset = (after + timedelta(days=2)).astimezone(zone).utcoffset() or timedelta()
+    rollback = max(timedelta(), offset - future_offset)
+    iterator = croniter(expression, wall - rollback)
+    earliest: datetime | None = None
+    for _ in range(5000):
+        candidate = iterator.get_next(datetime)
+        for fold in (0, 1):
+            instant = candidate.replace(tzinfo=zone, fold=fold).astimezone(UTC)
+            if instant.astimezone(zone).replace(tzinfo=None) != candidate:
+                continue  # Nonexistent wall time: skip, never shift to another hour.
+            if instant > after and (earliest is None or instant < earliest):
+                earliest = instant
+        # During a rollback, inspect earlier wall times in both folds until we
+        # pass the current wall time; an earlier UTC first-fold match may exist.
+        if earliest is not None and candidate > wall:
+            return earliest
+    raise ValueError("Cannot find a valid cron occurrence within search bounds")
 
 
 class RunCreator(Protocol):

@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 import time
+from datetime import UTC
 from typing import Any
+from uuid import UUID
 
 from pydantic import TypeAdapter
 from sqlalchemy import select
@@ -38,6 +40,10 @@ from tokendrain.storage.files import ProjectStorage
 from tokendrain.vm.models import VmBackend, VmHandle, VmSpec
 
 log = logging.getLogger(__name__)
+
+
+class BudgetReached(Exception):
+    pass
 
 
 class Supervisor:
@@ -85,6 +91,26 @@ class Supervisor:
                     "Workspace retained; inspect before resuming."
                 )
                 execution.finished_at = utcnow()
+                saved_report = await db.get(Report, execution.id)
+                recovery_report = (
+                    RunReport.model_validate(saved_report.content)
+                    if saved_report
+                    else RunReport(summary="Daemon restarted before a final report was available.")
+                )
+                recovery_report.status = "failed"
+                recovery_report.blockers.append(execution.error)
+                recovery_report.suggested_next_action = (
+                    "Inspect the persisted workspace and thread before continuing."
+                )
+                if saved_report:
+                    saved_report.content = recovery_report.model_dump(mode="json")
+                else:
+                    db.add(
+                        Report(
+                            execution_id=execution.id,
+                            content=recovery_report.model_dump(mode="json"),
+                        )
+                    )
                 project = await db.get(Project, execution.project_id)
                 if project:
                     project.status = "failed"
@@ -176,8 +202,22 @@ class Supervisor:
             run = await db.get(Run, execution.run_id)
             assert project is not None and run is not None
             run.status, run.started_at = "running", run.started_at or utcnow()
+            run_started = (
+                run.started_at.replace(tzinfo=UTC)
+                if run.started_at.tzinfo is None
+                else run.started_at
+            )
+            elapsed_before = max(0.0, (utcnow() - run_started).total_seconds())
+            clock_started = time.monotonic()
             project_id, run_id = project.id, run.id
             policy = TypeAdapter(list[StopCondition]).validate_python(run.stop_conditions)
+            previous_report = await db.scalar(
+                select(Report.content)
+                .join(ProjectExecution)
+                .where(ProjectExecution.project_id == project_id)
+                .order_by(Report.created_at.desc())
+                .limit(1)
+            )
             integration = await db.get(ProjectGitHub, project_id)
             app = await db.get(GitHubApp, 1)
             secrets_rows = list(
@@ -189,6 +229,7 @@ class Supervisor:
             )
         session: WorkSession | None = None
         handle: VmHandle | None = None
+        start_attempted = False
         final = ExecutionState.COMPLETED
         error_text: str | None = None
         report = RunReport(summary="Execution stopped before a report was produced.")
@@ -197,6 +238,9 @@ class Supervisor:
         original_task_log = project.task_log
         runtime_values: dict[str, str] = {}
         redactor = SecretRedactor()
+
+        def elapsed() -> float:
+            return elapsed_before + time.monotonic() - clock_started
 
         async def emit(message: str) -> None:
             await self.events.publish(
@@ -235,6 +279,10 @@ class Supervisor:
             async with self.storage.lease(project_id):
                 try:
                     await self.runs.transition(execution_id, ExecutionState.PREPARING)
+                    if cancel.is_set():
+                        raise asyncio.CancelledError
+                    if reason := stop_reason(policy, [], elapsed()):
+                        raise BudgetReached(reason)
                     await self.projects.snapshot(project_id, f"Before run {run_id[:8]}")
                     if cancel.is_set():
                         raise asyncio.CancelledError
@@ -246,7 +294,10 @@ class Supervisor:
                             )
                         runtime_values[secret.name] = value.decode()
                     redactor.replace_values(list(runtime_values.values()))
+                    if reason := stop_reason(policy, [], elapsed()):
+                        raise BudgetReached(reason)
                     await self.runs.transition(execution_id, ExecutionState.STARTING_VM)
+                    start_attempted = True
                     handle = await self.vm.start(
                         VmSpec(
                             execution_id=execution_id,
@@ -269,19 +320,18 @@ class Supervisor:
                         live = await db.get(ProjectExecution, execution_id)
                         assert live_project is not None and live is not None
                         live_project.thread_id = live.thread_id = thread_id
-                        if live_project.next_run_feedback == project.next_run_feedback:
-                            live_project.next_run_feedback = ""
                     await self.runs.transition(execution_id, ExecutionState.RUNNING)
-                    started = time.monotonic()
                     starting_windows = await session.usage()
                     windows = starting_windows
-                    prompt = self.context(project, integration, secrets_rows)
+                    prompt = self.context(project, integration, secrets_rows, previous_report)
                     while True:
                         if cancel.is_set():
                             raise asyncio.CancelledError
-                        reason = stop_reason(policy, windows, time.monotonic() - started)
+                        reason = stop_reason(policy, windows, elapsed())
                         if reason:
                             await emit(reason)
+                            if report.summary == "Execution stopped before a report was produced.":
+                                report.summary = reason
                             break
                         requested = [rule for rule in policy if isinstance(rule, UsageStop)]
                         for rule in requested:
@@ -302,6 +352,13 @@ class Supervisor:
                         report = await session.turn(
                             prompt, execution.model, execution.reasoning_effort, cancel
                         )
+                        async with self.sessions.begin() as db:
+                            live_project = await db.get(Project, project_id)
+                            if (
+                                live_project
+                                and live_project.next_run_feedback == project.next_run_feedback
+                            ):
+                                live_project.next_run_feedback = ""
                         report.usage = ReportUsage(start=starting_windows, end=windows)
                         original_task_log = await self.save_report(
                             execution_id, project_id, report, original_task_log
@@ -311,7 +368,7 @@ class Supervisor:
                         if report.status == "blocked":
                             final = ExecutionState.BLOCKED
                             break
-                        if report.status == "failed":
+                        if report.status in {"failed", "cancelled"}:
                             final = ExecutionState.FAILED
                             error_text = report.summary
                             break
@@ -332,8 +389,14 @@ class Supervisor:
                             if current:
                                 prompt += "\nCurrent description: " + current.description
                                 prompt += "\nCurrent task log: " + current.task_log
+                except BudgetReached as error:
+                    report.summary = str(error)
+                    await emit(str(error))
                 except ProviderLimited:
-                    await emit("Provider usage limit prevents another turn; retained last report.")
+                    reason = "Provider usage limit prevents another turn; retained last report."
+                    if report.summary == "Execution stopped before a report was produced.":
+                        report.summary = reason
+                    await emit(reason)
                 except asyncio.CancelledError:
                     if cancel.is_set():
                         final = ExecutionState.CANCELLED
@@ -348,12 +411,25 @@ class Supervisor:
                     error_text = redactor.redact(f"{type(error).__name__}: {error}")
                     await emit(error_text)
                 finally:
-                    await self.runs.transition(execution_id, ExecutionState.STOPPING)
+                    async with self.sessions() as db:
+                        current_execution = await db.get(ProjectExecution, execution_id)
+                        assert current_execution
+                        current_state = ExecutionState(current_execution.status)
+                    if current_state != ExecutionState.QUEUED:
+                        await self.runs.transition(execution_id, ExecutionState.STOPPING)
                     if session:
                         try:
                             await session.close()
                         except Exception as error:
-                            await emit(f"Guest shutdown failed: {type(error).__name__}")
+                            final = ExecutionState.FAILED
+                            error_text = f"Guest shutdown failed: {type(error).__name__}"
+                            await emit(error_text)
+                    if start_attempted and handle is None:
+                        # A failed start may have created host resources before
+                        # returning its handle. Reconcile only this execution.
+                        for orphan in await self.vm.reconcile():
+                            if UUID(orphan.execution_id) == UUID(execution_id):
+                                await self.vm.stop(orphan)
                     if handle:
                         # A failed host stop MUST keep the project reservation active.
                         await self.vm.stop(handle)
@@ -362,7 +438,22 @@ class Supervisor:
                         report.status = "failed" if final == ExecutionState.FAILED else "cancelled"
                         report.blockers.append(error_text or "Infrastructure interrupted execution")
                     await self.save_report(execution_id, project_id, report, original_task_log)
+                    if current_state == ExecutionState.QUEUED:
+                        final = ExecutionState.FAILED
                     await self.runs.transition(execution_id, final, error_text)
+        except asyncio.CancelledError:
+            # Cancellation while waiting for the lease never attached disks.
+            async with self.sessions() as db:
+                live = await db.get(ProjectExecution, execution_id)
+                state = ExecutionState(live.status) if live else None
+            if state == ExecutionState.QUEUED:
+                await self.runs.transition(
+                    execution_id,
+                    ExecutionState.CANCELLED if cancel.is_set() else ExecutionState.FAILED,
+                    "Stopped before preparation",
+                )
+            else:
+                raise
         except Exception as error:
             # Unconfirmed teardown is visible and reserved. Startup reconciliation retries it.
             await emit(
@@ -375,6 +466,15 @@ class Supervisor:
                         "Unconfirmed cleanup. Project remains reserved; "
                         "restart daemon to reconcile."
                     )
+                    queued_failure = live.status == "queued" and not start_attempted
+                else:
+                    queued_failure = False
+            if queued_failure:
+                await self.runs.transition(
+                    execution_id,
+                    ExecutionState.FAILED,
+                    redactor.redact(f"Preparation failed: {type(error).__name__}: {error}"),
+                )
         finally:
             runtime_values.clear()
             await self.finish_run(run_id)
@@ -397,7 +497,10 @@ class Supervisor:
 
     @staticmethod
     def context(
-        project: Project, integration: ProjectGitHub | None, secrets: list[SecretEntry]
+        project: Project,
+        integration: ProjectGitHub | None,
+        secrets: list[SecretEntry],
+        previous_report: dict[str, Any] | None = None,
     ) -> str:
         context: dict[str, Any] = {
             "project": project.name,
@@ -406,6 +509,7 @@ class Supervisor:
             "feedback": project.next_run_feedback,
             "workspace": "/workspace",
             "persistent_environment": "/persist",
+            "previous_run": previous_report,
             "secrets": [{"name": secret.name, "purpose": secret.description} for secret in secrets],
         }
         if integration:

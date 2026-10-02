@@ -129,3 +129,19 @@ async def test_guest_handshake_and_codex_proxy(tmp_path: Path) -> None:
             await client.close()
             for peer in peer_holder:
                 await peer.close()
+
+
+async def test_notification_queue_bounds_bytes_and_releases_backpressure() -> None:
+    from tokendrain.codex.rpc import NotificationQueue, RpcNotification
+
+    queue = NotificationQueue(max_bytes=100)
+    event = RpcNotification(method="log", params={"line": "x" * 40})
+    await queue.put(event)
+    pending = asyncio.create_task(queue.put(event))
+    await asyncio.sleep(0)
+    assert not pending.done()
+    assert await queue.get() == event
+    await asyncio.wait_for(pending, 1)
+    assert 0 < queue.queued_bytes <= 100
+    with pytest.raises(ValueError, match="byte limit"):
+        await queue.put(RpcNotification(method="log", params={"line": "x" * 500}))

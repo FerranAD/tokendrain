@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import re
 import secrets
@@ -109,7 +110,12 @@ class SecretRedactor:
         self.replace_values(values or [])
 
     def replace_values(self, values: list[str]) -> None:
-        self._values = tuple(sorted({value for value in values if value}, key=len, reverse=True))
+        variants = {value for value in values if value}
+        # Agent messages can themselves contain JSON text inside a JSON event.
+        # Redact standard escaping as well as raw values, without changing keys.
+        variants.update(json.dumps(value, ensure_ascii=True)[1:-1] for value in values if value)
+        variants.update(json.dumps(value, ensure_ascii=False)[1:-1] for value in values if value)
+        self._values = tuple(sorted(variants, key=len, reverse=True))
 
     def redact(self, message: str) -> str:
         for value in self._values:

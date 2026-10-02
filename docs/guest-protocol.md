@@ -42,7 +42,8 @@ IDs are request-correlated and scoped to each connection. Notifications have no
 ID. Both peers can initiate requests; no request is blindly retried on connection
 loss. Each request has a deadline. Errors fail the pending operation rather than
 pretending it succeeded. Disconnect fails every pending request. Notification
-queues are bounded with backpressure and do not silently drop terminal events.
+queues are bounded to 256 events and 16 MiB with backpressure and do not silently
+drop terminal events. Accumulated report text is limited to 8 MiB per turn.
 
 ## Operations
 
