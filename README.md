@@ -70,6 +70,7 @@ Use a GitHub revision containing this implementation, or the local checkout inpu
 ```sh
 sudo nixos-rebuild switch --flake /etc/nixos#my-host
 sudo systemctl status tokendraind tokendrain-helper
+sudo tokendrain doctor
 ```
 
 The first guest build includes Nix, Codex, compilers, and development tools. Creating projects later does not require a rebuild.
@@ -119,6 +120,8 @@ Usage windows come from actual provider metadata. They are not assumed to mean a
 
 Runtime and percentage budgets are checked between turns and are soft work boundaries. Cancellation, credential expiry handling, and the separate turn watchdog can interrupt an active turn. A run marked `completed` means its execution window ended normally; the report separately says whether the project's goal is complete.
 
+Next-run feedback remains pending until an execution returns a turn result. Failed boot or authentication does not consume it. New feedback entered while work is running is retained for a later run.
+
 ## Operate and recover
 
 ```sh
@@ -130,7 +133,11 @@ sudo journalctl -u tokendraind -u tokendrain-helper -f
 sudo journalctl -u 'tokendrain-vm-*' --since today
 ```
 
-The CLI needs access to the configured admin-token file for API commands. On an installed host, run it as the service user, for example `sudo -u tokendrain tokendrain status`. `doctor` reports local prerequisites; device visibility inside the hardened daemon differs from the host.
+The CLI needs access to the configured admin-token file for API commands. On an installed host, run it as the service user, for example `sudo -u tokendrain tokendrain status`. Use `sudo tokendrain doctor` for complete host diagnostics, including the root-owned master-key source; device visibility inside the hardened daemon differs from the host.
+
+Before reconnecting/importing/disconnecting OpenAI, replacing the GitHub App key, or refreshing GitHub installations, pause schedules and finish or cancel queued and active runs. The API reserves these account changes against new run creation. Normal automatic token refresh continues during executions.
+
+Execution defaults saved in Settings survive daemon restarts and take precedence over NixOS initial defaults. NixOS concurrency, CPU, and memory maxima still apply. Increasing the default disk size affects newly created projects; use a project's Environment controls to grow an existing disk.
 
 Each project's **Environment** tab provides snapshots, selective restore, environment reset, and offline disk growth. Snapshots are disk copies, not RAM snapshots.
 
@@ -151,7 +158,7 @@ npm ci
 npm run build
 ```
 
-Test backends exercise orchestration without OpenAI credentials or KVM. Separate tests boot real Firecracker guests, verify persistent workspace/environment state, and exercise the helper and network isolation inside disposable NixOS machines. Browser tests cover UI/API interactions and mobile layout. Live provider sign-in, account entitlements, and GitHub repository writes require real accounts and are separate acceptance checks.
+Test backends exercise orchestration without OpenAI credentials or KVM. Separate tests boot real Firecracker guests, verify persistent workspace/environment state, and exercise the helper and network isolation inside disposable NixOS machines. Browser tests cover UI/API interactions and mobile layout. Live provider sign-in, actual inference/account entitlements, multi-hour provider token rotation, and GitHub repository writes have not been exercised with real accounts; the [development guide](docs/development.md#live-account-acceptance) lists those remaining acceptance checks.
 
 See [development instructions](docs/development.md) for the mock daemon, browser checks, real KVM tests, and NixOS tests.
 

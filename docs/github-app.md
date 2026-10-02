@@ -24,6 +24,8 @@ For a local/tunneled deployment, the setup address can be `http://127.0.0.1:8742
 
 Tokendrain authenticates as the App installation. It does not request a GitHub user access token or attribute its API activity to an OAuth-authorized human. GitHub distinguishes the installation setup return from the OAuth authorization callback. [Setup URL behavior](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url).
 
+Pause schedules and finish or cancel all queued and active runs before configuring the App, rotating its key, or refreshing installations. These host-wide operations reserve provider configuration against new runs until they finish. Automatic short-lived token renewal during a run is unaffected.
+
 ## 2. Choose maximum repository permissions
 
 Set only the App permissions you expect to grant projects. Typical choices are:
@@ -76,7 +78,7 @@ The user-granted project permissions authorize autonomous work. There is no addi
 - **A repository is missing:** check the installation's selected repositories on GitHub, then refresh and reselect it in the project.
 - **Token issuance returns 403/422:** the requested subset may exceed the installation's current permissions or repository access. Accept any pending App permission change on GitHub, or narrow the project settings.
 - **Push or PR fails:** inspect execution events, repository branch rules, required checks, and the selected capability. A token does not bypass repository policy.
-- **Permissions change while a run is active:** stop the run, update the project binding, and start another execution. The running session retains its initial integration configuration until stopped.
+- **Permissions change while a run is active:** stop the run, update the project binding, and start another execution. A binding cannot be changed while that project has a queued or active execution. Refreshing installation permissions first requires all projects to be idle.
 - **Key rotation:** generate a new App PEM, reconfigure tokendrain, verify discovery, and remove the retired key in GitHub. The new key remains host-only.
 - **Compromised access:** revoke the installation or credentials at GitHub. Disconnecting the project stops future injection but cannot erase copies already made by arbitrary guest software.
 

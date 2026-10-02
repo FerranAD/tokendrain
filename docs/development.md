@@ -106,6 +106,18 @@ nix build .#checks.x86_64-linux.firecracker -L
 
 The module smoke boots the service and checks its HTTP health endpoint. The Firecracker test needs nested KVM and exercises helper/systemd confinement, concurrent guests, simulated public egress, blocked host/LAN/interguest traffic, firewall reload behavior, persistence, and cleanup. Its network endpoints are in the test network, not public services. See [microVM documentation](microvms.md) for diagnostic commands and platform details.
 
+## Live account acceptance
+
+Provider mocks, the installed Codex protocol smoke, and real guest boots pass without borrowing developer credentials. These checks still require accounts configured by the administrator through tokendrain:
+
+1. Complete Sign in with ChatGPT and separately exercise the advanced import path with an eligible Codex account.
+2. Run a small disposable project with an available model, inspect its output and report, then run it again to verify continuation using real inference.
+3. Keep a run active through token expiry to validate actual provider refresh and thread recovery. Mock tests cover the protocol and locking; they cannot establish account entitlement or provider behavior.
+4. Inspect the account's actual usage windows and exercise a matching budget threshold. Use duration or provider exhaustion if the connected provider does not expose percentage windows.
+5. Install a self-owned GitHub App on a disposable repository, grant a limited project scope, and verify a branch push and pull request. Repeat through installation-token renewal.
+
+Live sign-in, paid/plan inference, multi-hour provider rotation and GitHub writes have not been performed as part of the automated test suite. Keep those acceptance runs separate from production projects.
+
 ## Nix build outputs
 
 ```sh

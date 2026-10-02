@@ -6,7 +6,8 @@ a token from one is never sent through the other's provider configuration.
 
 ## Continue with ChatGPT
 
-Open Settings → OpenAI, then **Continue with ChatGPT**. First authorization
+Open Settings → OpenAI / Codex, then **Sign in with ChatGPT** and follow the
+secure sign-in link. First authorization
 registers `tokendrain` using OpenAI's `dynamic_agent_client` entrypoint. No partner
 key, client secret, or pre-registered developer client is needed. The browser lets
 you authorize use of your ChatGPT plan and returns an issued client identifier.
@@ -15,6 +16,12 @@ it on subsequent sign-ins. Each host has a stable independent host identifier. T
 persists a canonical `urn:uuid:<UUIDv4>` for this purpose. Arbitrary labels are
 not accepted by the OpenAI interface; other documented formats are RFC 9278 JWK
 thumbprint URIs and `did:key` identifiers.
+
+Pause schedules and finish or cancel queued and active runs before connecting,
+importing, reconnecting, or disconnecting an account. The same idle requirement
+is checked when the browser returns from authorization, so avoid starting a run
+before completing sign-in. Automatic access-token refresh during work does not
+require this administrative pause.
 
 The current public-client flow requires an HTTP loopback callback with the exact
 host `127.0.0.1` and path `/auth/callback`. For a remote installation, open an SSH

@@ -94,7 +94,7 @@ The supervisor owns execution tasks through structured concurrency. It enforces 
 6. Read actual provider limits and request a substantial autonomous work unit. Save structured progress, then continue while the policy permits another turn.
 7. Stop Codex, clear managed runtime credentials, stop the guest, and confirm VMM exit before releasing the project.
 
-The agent inspects current files and processes before acting. Durable project state supplies context instead of continually replaying historical conversations. Feedback is consumed when a session begins, with concurrent edits retained. Agent task-log updates compare against the last observed text so they do not overwrite a newer user edit.
+The agent inspects current files and processes before acting. Durable project state supplies context instead of continually replaying historical conversations. Feedback is cleared only after a turn returns a result, and only if its text still matches the instructions supplied to that session. A boot, authentication, or budget failure before any result leaves the feedback available for another run. Concurrently edited feedback is retained. Agent task-log updates compare against the last observed text so they do not overwrite a newer user edit.
 
 Reports include summary, completed/remaining work, blockers, change counts and commits when available, next action, task log, and usage observations. Malformed model output becomes an incomplete report; it cannot prove completion. Earlier progress survives a subsequent provider or infrastructure failure.
 
@@ -113,6 +113,10 @@ The host owns long-lived OpenAI and GitHub credentials. Guests receive current O
 Per-account locks serialize OpenAI refresh. Rotation normally occurs at a turn boundary. When expiry requires interruption, the host waits for the terminal event, restarts and initializes Codex, and resumes the thread. The next request inspects existing work instead of replaying the interrupted action.
 
 The GitHub provider centralizes and serializes token issuance for scoped project bindings. Guestd updates runtime Git credentials and process environment on rotation. Secret values enter the runtime environment; prompts contain their names and intended uses.
+
+Replacing or disconnecting the OpenAI account, changing the GitHub App, and refreshing GitHub installation discovery require every execution to be terminal, including queued executions. A durable credential-change reservation prevents new runs from starting while those operations are in progress. This gate does not block automatic runtime token refresh. Changing one project's repository binding requires that project to be idle.
+
+Adding, editing or deleting generic secrets also requires the affected project to be idle. Secret metadata changes and Run admission serialize in SQLite, so a queued execution cannot lose a credential while preparing its runtime environment. Values staged before a rejected change are removed unless the database already references them; an unavailable database leaves an encrypted orphan instead of risking deletion of a live credential.
 
 ## Scheduling
 
