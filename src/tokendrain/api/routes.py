@@ -1,7 +1,9 @@
 import asyncio
 import json
 import time
-from typing import Any
+from collections.abc import Awaitable, Callable
+from functools import wraps
+from typing import Any, cast
 from uuid import uuid4
 
 import httpx
@@ -13,7 +15,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
 from tokendrain import __version__
 from tokendrain.api.app import current, encoded
@@ -61,6 +63,15 @@ from tokendrain.usage import normalize_rate_limits
 
 router = APIRouter()
 API = "/api/v1"
+
+
+def provider_change[F: Callable[..., Awaitable[Any]]](handler: F) -> F:
+    @wraps(handler)
+    async def guarded(request: Request, *args: Any, **kwargs: Any) -> Any:
+        async with current(request).runs.credentials_change():
+            return await handler(request, *args, **kwargs)
+
+    return cast(F, guarded)
 
 
 def ready(services: Application) -> None:
@@ -139,6 +150,18 @@ async def remove_project(request: Request, project_id: str) -> Response:
     async with services.storage.lease(project_id):
         await services.projects.require_idle(project_id)
         async with services.sessions.begin() as db:
+            # Serialize admission/deletion in SQLite, including scheduler-created Runs.
+            await db.execute(text("BEGIN IMMEDIATE"))
+            active = await db.scalar(
+                select(ProjectExecution.id)
+                .where(
+                    ProjectExecution.project_id == project_id,
+                    ProjectExecution.status.not_in([state.value for state in TERMINAL]),
+                )
+                .limit(1)
+            )
+            if active:
+                raise ValueError("Project has an active or queued execution")
             refs = list(
                 (
                     await db.scalars(
@@ -518,6 +541,7 @@ async def openai_login(request: Request) -> Any:
 
 
 @router.get("/auth/callback")
+@provider_change
 async def openai_callback(
     request: Request,
     state: str,
@@ -543,6 +567,7 @@ async def openai_callback(
 
 
 @router.post(API + "/auth/openai/import")
+@provider_change
 async def import_openai(request: Request, body: AuthImport) -> Any:
     services = current(request)
     await no_active(services)
@@ -558,6 +583,7 @@ async def import_openai(request: Request, body: AuthImport) -> Any:
 
 
 @router.delete(API + "/auth/openai", status_code=204)
+@provider_change
 async def disconnect_openai(request: Request) -> Response:
     services = current(request)
     await no_active(services)
@@ -603,25 +629,37 @@ async def github_app(services: Application) -> GitHubApp:
 
 
 @router.put(API + "/integrations/github")
+@provider_change
 async def configure_github(request: Request, body: GitHubConfig) -> Any:
     services = current(request)
     await no_active(services)
     ref = f"github-key-{uuid4().hex}"
-    await services.credentials.put(ref, body.private_key.get_secret_value().encode())
     try:
+        await services.credentials.put(ref, body.private_key.get_secret_value().encode())
         info = await services.github.inspect_app(body.app_id, ref)
         async with services.sessions.begin() as db:
             old = await db.get(GitHubApp, 1)
             old_ref = old.credential_ref if old else None
+            changed_app = old is not None and old.app_id != body.app_id
             if old:
                 old.app_id, old.slug, old.credential_ref = body.app_id, info["slug"], ref
             else:
                 db.add(GitHubApp(id=1, app_id=body.app_id, slug=info["slug"], credential_ref=ref))
             await db.execute(delete(GitHubInstallation))
-            # Old repository grants belong to the previous App; require explicit reattachment.
-            await db.execute(delete(ProjectGitHub))
+            # Grants must be reselected for a different App, but survive key rotation.
+            if changed_app:
+                await db.execute(delete(ProjectGitHub))
     except BaseException:
-        await services.credentials.delete(ref)
+        # Cancellation during commit has an uncertain result. Never remove a key
+        # that SQLite already references; an encrypted orphan is safe to retain.
+        try:
+            async with services.sessions() as db:
+                saved = await db.get(GitHubApp, 1)
+                referenced = saved is not None and saved.credential_ref == ref
+            if not referenced:
+                await services.credentials.delete(ref)
+        except Exception:
+            pass
         raise
     if old_ref:
         await services.credentials.delete(old_ref)
@@ -631,6 +669,7 @@ async def configure_github(request: Request, body: GitHubConfig) -> Any:
 
 
 @router.post(API + "/integrations/github/sync")
+@provider_change
 async def sync_github(request: Request) -> Any:
     services = current(request)
     app = await github_app(services)
@@ -672,13 +711,35 @@ async def project_github(request: Request, project_id: str) -> Any:
 async def attach_github(request: Request, project_id: str, body: IntegrationInput) -> Any:
     services = current(request)
     await services.projects.require_idle(project_id)
+    app_revision = await github_app(services)
     repos = await repositories(request, body.installation_id)
     repository = next((repo for repo in repos if repo["id"] == body.repository_id), None)
     if repository is None or repository["full_name"] != body.repository_name:
         raise ValueError("Repository is not available to this installation")
     async with services.sessions.begin() as db:
+        await db.execute(text("BEGIN IMMEDIATE"))
+        app = await db.get(GitHubApp, 1)
+        if (
+            await db.get(Setting, "provider_change")
+            or app is None
+            or app.credential_ref != app_revision.credential_ref
+        ):
+            raise ValueError("GitHub configuration changed; reload repositories and retry")
+        if not await db.get(Project, project_id):
+            raise LookupError("Project not found")
+        active = await db.scalar(
+            select(ProjectExecution.id)
+            .where(
+                ProjectExecution.project_id == project_id,
+                ProjectExecution.status.not_in([state.value for state in TERMINAL]),
+            )
+            .limit(1)
+        )
+        if active:
+            raise ValueError("Project has an active or queued execution")
         installation = await db.get(GitHubInstallation, body.installation_id)
-        assert installation
+        if installation is None:
+            raise ValueError("Installation changed; sync GitHub and reload repositories")
         for permission, requested in body.permissions.items():
             maximum = installation.permissions.get(permission, "none")
             if maximum == "none" or (requested == "write" and maximum != "write"):
@@ -698,6 +759,17 @@ async def detach_github(request: Request, project_id: str) -> Response:
     services = current(request)
     await services.projects.require_idle(project_id)
     async with services.sessions.begin() as db:
+        await db.execute(text("BEGIN IMMEDIATE"))
+        active = await db.scalar(
+            select(ProjectExecution.id)
+            .where(
+                ProjectExecution.project_id == project_id,
+                ProjectExecution.status.not_in([state.value for state in TERMINAL]),
+            )
+            .limit(1)
+        )
+        if active:
+            raise ValueError("Project has an active or queued execution")
         await db.execute(delete(ProjectGitHub).where(ProjectGitHub.project_id == project_id))
     await services.events.publish("project.github_updated", project_id=project_id)
     return Response(status_code=204)

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 import httpx
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tokendrain.auth.openai import OpenAIAuthManager
@@ -21,7 +22,7 @@ from tokendrain.orchestration.driver import RealSessionFactory, SessionFactory
 from tokendrain.orchestration.mock import MockSessionFactory, MockStorage, MockVmBackend
 from tokendrain.orchestration.supervisor import Supervisor
 from tokendrain.scheduler.service import Scheduler
-from tokendrain.security import SessionTokens, protected_file
+from tokendrain.security import SessionTokens, protected_file, stable_host_id
 from tokendrain.services import ProjectService, RunService
 from tokendrain.storage import FileProjectStorage
 from tokendrain.storage.files import ProjectStorage
@@ -76,6 +77,9 @@ class Application:
         try:
             await migrate(settings.database_path)
             engine, sessions = open_database(settings.database_path)
+            async with sessions.begin() as db:
+                # The process lock proves no former credential mutation can still finish.
+                await db.execute(delete(Setting).where(Setting.key == "provider_change"))
             if settings.master_key_file is None:
                 if settings.backend != "mock":
                     raise ValueError("TOKENDRAIN_MASTER_KEY_FILE is required for the real backend")
@@ -85,9 +89,7 @@ class Application:
             credentials = EncryptedFileCredentialStore(settings.state_dir / "credentials", key)
             admin_path = settings.admin_token_file or settings.state_dir / "admin-token"
             token = (await asyncio.to_thread(protected_file, admin_path)).decode()
-            host_id = (
-                await asyncio.to_thread(protected_file, settings.state_dir / "host-id")
-            ).decode()
+            host_id = await asyncio.to_thread(stable_host_id, settings.state_dir / "host-id")
             http = overrides.http or httpx.AsyncClient(timeout=30, follow_redirects=False)
             auth = OpenAIAuthManager(
                 credentials, http, host_id, runtime_dir=settings.auth_runtime_dir

@@ -1,9 +1,12 @@
 """Application services, transaction boundaries and resource ownership."""
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -13,6 +16,7 @@ from tokendrain.db.models import (
     ProjectSnapshot,
     Report,
     Run,
+    Setting,
     UsageSnapshot,
     new_id,
 )
@@ -122,6 +126,33 @@ class ProjectService:
 class RunService:
     def __init__(self, sessions: async_sessionmaker[AsyncSession], events: EventBus) -> None:
         self.sessions, self.events = sessions, events
+        self._credential_owner: asyncio.Task[Any] | None = None
+
+    @asynccontextmanager
+    async def credentials_change(self) -> AsyncIterator[None]:
+        task = asyncio.current_task()
+        if task is not None and self._credential_owner is task:
+            yield
+            return
+        async with self.sessions.begin() as db:
+            await db.execute(text("BEGIN IMMEDIATE"))
+            if await db.get(Setting, "provider_change"):
+                raise ValueError("Another credential change is in progress")
+            active = await db.scalar(
+                select(ProjectExecution.id)
+                .where(ProjectExecution.status.not_in([state.value for state in TERMINAL]))
+                .limit(1)
+            )
+            if active:
+                raise ValueError("Cancel or finish active Runs before changing credentials")
+            db.add(Setting(key="provider_change", value={"started_at": utcnow().isoformat()}))
+        self._credential_owner = task
+        try:
+            yield
+        finally:
+            self._credential_owner = None
+            async with self.sessions.begin() as db:
+                await db.execute(delete(Setting).where(Setting.key == "provider_change"))
 
     async def create_run_in(
         self,
@@ -131,6 +162,8 @@ class RunService:
         schedule_id: str | None = None,
         scheduled_for: datetime | None = None,
     ) -> str:
+        if await db.get(Setting, "provider_change"):
+            raise ValueError("Credential configuration is changing; retry after it completes")
         run = Run(
             id=new_id(),
             parallel=template.parallel,
@@ -160,7 +193,11 @@ class RunService:
                     run_id=run.id,
                     project_id=project.id,
                     model=config.model or project.default_model,
-                    reasoning_effort=config.reasoning_effort,
+                    reasoning_effort=(
+                        config.reasoning_effort
+                        if "reasoning_effort" in config.model_fields_set
+                        else project.default_reasoning_effort
+                    ),
                 )
             )
         db.add(run)
@@ -174,6 +211,7 @@ class RunService:
 
     async def create(self, template: RunTemplate) -> dict[str, Any]:
         async with self.sessions.begin() as db:
+            await db.execute(text("BEGIN IMMEDIATE"))
             run_id = await self.create_run_in(db, template)
         await self.events.publish("run.created", run_id=run_id)
         return await self.get(run_id)

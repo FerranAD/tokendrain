@@ -9,6 +9,14 @@ import time
 from pathlib import Path
 
 
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class SessionTokens:
     def __init__(self, admin_token: str) -> None:
         if len(admin_token) < 32:
@@ -30,7 +38,7 @@ class SessionTokens:
             expiry = int(value.split(".", 1)[0])
             expected = hmac.new(self._key, value.encode(), hashlib.sha256).digest()
             return expiry > time.time() and hmac.compare_digest(
-                base64.urlsafe_b64decode(signature), expected
+                base64.b64decode(signature, altchars=b"-_", validate=True), expected
             )
         except (ValueError, TypeError):
             return False
@@ -47,8 +55,34 @@ def protected_file(path: Path, size: int = 32, *, raw: bool = False) -> bytes:
                 file.write(value)
                 file.flush()
                 os.fsync(file.fileno())
+            _sync_directory(path.parent)
         except FileExistsError:
             pass
     if path.stat().st_mode & 0o077:
         raise ValueError(f"Credential file must have mode 0600 or 0400: {path}")
     return path.read_bytes().strip() if not raw else path.read_bytes()
+
+
+def stable_host_id(path: Path) -> str:
+    """SIWC requires a supported host URI, not an arbitrary random identifier."""
+    from uuid import UUID, uuid4
+
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(descriptor, "w") as file:
+            file.write(f"urn:uuid:{uuid4()}")
+            file.flush()
+            os.fsync(file.fileno())
+        _sync_directory(path.parent)
+    value = path.read_text().strip()
+    if value.startswith("urn:uuid:"):
+        identifier = UUID(value.removeprefix("urn:uuid:"))
+        if identifier.version == 4:
+            return value
+    elif value.startswith(("urn:ietf:params:oauth:jwk-thumbprint:", "did:key:")):
+        return value
+    raise ValueError("Saved host-id is not a supported SIWC host URI")

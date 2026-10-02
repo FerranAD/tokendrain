@@ -7,7 +7,7 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tokendrain.db.models import Schedule
@@ -72,6 +72,7 @@ class Scheduler:
         now = now or utcnow()
         notifications: list[tuple[str, str]] = []
         async with self.sessions.begin() as db:
+            await db.execute(text("BEGIN IMMEDIATE"))
             schedules = list(
                 (
                     await db.scalars(

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from tokendrain.api.app import create_app
 from tokendrain.application import Application, Overrides
 from tokendrain.config import Settings
-from tokendrain.db.models import Event, ProjectExecution, Schedule, SecretEntry
+from tokendrain.db.models import Event, ProjectExecution, Schedule, SecretEntry, Setting
 from tokendrain.domain import utcnow
 
 
@@ -301,3 +301,91 @@ async def test_platform_resource_ceiling(api):
         json={"concurrency": 3, "vm_defaults": {"vcpus": 2, "memory_mib": 2048, "disk_gib": 20}},
     )
     assert result.status_code == 409
+
+
+async def test_run_creation_and_deletion_are_atomic_under_contention(api):
+    from sqlalchemy import text
+
+    from tokendrain.db.models import Run
+
+    client, services = api
+    for _ in range(8):
+        project_id = await new_project(client)
+        # Hold the SQLite writer so both operations reach admission concurrently.
+        async with services.sessions.begin() as blocker:
+            await blocker.execute(text("BEGIN IMMEDIATE"))
+            creating = asyncio.create_task(
+                client.post("/api/v1/runs", json={"projects": [{"project_id": project_id}]})
+            )
+            deleting = asyncio.create_task(client.delete(f"/api/v1/projects/{project_id}"))
+            await asyncio.sleep(0.01)
+        try:
+            created, removed = await asyncio.gather(creating, deleting)
+        finally:
+            for task in (creating, deleting):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(creating, deleting, return_exceptions=True)
+        assert (created.status_code, removed.status_code) in {(201, 409), (409, 204)}
+    async with services.sessions() as db:
+        run_rows = (await db.scalars(select(Run))).all()
+        execution_rows = (await db.scalars(select(ProjectExecution))).all()
+        assert len(run_rows) == len(execution_rows)
+        assert {row.id for row in run_rows} == {row.run_id for row in execution_rows}
+
+
+async def test_provider_configuration_serializes_with_run_admission(api):
+    client, services = api
+    project_id = await new_project(client)
+    template = {"projects": [{"project_id": project_id}]}
+    async with services.runs.credentials_change():
+        # Configuration can invoke a second provider operation in the same task.
+        async with services.runs.credentials_change():
+            assert (await client.post("/api/v1/runs", json=template)).status_code == 409
+
+        async def competing_change():
+            with pytest.raises(ValueError, match="in progress"):
+                async with services.runs.credentials_change():
+                    pytest.fail("Concurrent provider operation admitted")
+
+        await asyncio.create_task(competing_change())
+    assert (await client.post("/api/v1/runs", json=template)).status_code == 201
+    with pytest.raises(ValueError, match="active Runs"):
+        async with services.runs.credentials_change():
+            pytest.fail("Provider changed under an active Run")
+
+
+async def test_provider_configuration_cancellation_releases_admission(api):
+    client, services = api
+    project_id = await new_project(client)
+    entered = asyncio.Event()
+
+    async def changing():
+        async with services.runs.credentials_change():
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(changing())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    async with services.sessions() as db:
+        assert await db.get(Setting, "provider_change") is None
+    assert (
+        await client.post("/api/v1/runs", json={"projects": [{"project_id": project_id}]})
+    ).status_code == 201
+
+
+async def test_restart_clears_stale_provider_operation(tmp_path):
+    settings = Settings(state_dir=tmp_path, backend="mock", public_url="http://testserver")
+    first = await Application.open(settings, Overrides(start_workers=False))
+    async with first.sessions.begin() as db:
+        db.add(Setting(key="provider_change", value={"started_at": utcnow().isoformat()}))
+    await first.close()
+    second = await Application.open(settings, Overrides(start_workers=False))
+    try:
+        async with second.sessions() as db:
+            assert await db.get(Setting, "provider_change") is None
+    finally:
+        await second.close()
