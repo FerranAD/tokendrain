@@ -125,7 +125,29 @@
               machine.succeed("curl --fail http://127.0.0.1:8742/healthz")
               assert json.loads(machine.succeed("tokendrain --json projects")) == []
               assert json.loads(machine.succeed("tokendrain --json runs")) == []
-              machine.succeed("tokendrain status")
+              status = json.loads(machine.succeed("tokendrain --json status"))
+              checks = {check["name"]: check for check in status["checks"]}
+              assert checks["helper_socket"]["ok"], checks["helper_socket"]
+              assert checks["helper_socket"]["scope"] == "daemon", checks["helper_socket"]
+              assert checks["helper"]["ok"], checks["helper"]
+              assert checks["helper"]["scope"] == "helper", checks["helper"]
+              for name in ("firecracker", "ip", "nft"):
+                  assert checks[name]["ok"], checks[name]
+                  assert checks[name]["scope"] == "helper", checks[name]
+              for name in ("kvm", "tun", "guest_artifacts", "cgroup_v2", "ipv4_forwarding"):
+                  assert checks[name]["scope"] == "helper", checks[name]
+              # This smoke test deliberately omits usable guest artifacts.
+              # Reporting through the helper must retain real failures.
+              assert not checks["guest_artifacts"]["ok"], checks["guest_artifacts"]
+              assert "nix" not in checks, checks
+              for name in ("master_key", "database"):
+                  assert checks[name]["ok"], checks[name]
+                  assert checks[name]["scope"] == "daemon", checks[name]
+              # Diagnostics must not weaken the web daemon's isolation to
+              # make privileged devices and helper-only binaries visible.
+              assert machine.succeed("systemctl show tokendraind -p PrivateDevices --value").strip() == "yes"
+              assert machine.succeed("systemctl show tokendraind -p CapabilityBoundingSet --value").strip() == ""
+              machine.succeed("nsenter -t $(systemctl show tokendraind -p MainPID --value) -m test ! -e /dev/kvm")
               assert machine.succeed("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8742/api/v1/projects") == "401"
               assert '<div id="root">' in machine.succeed("curl --fail http://127.0.0.1:8742/")
               machine.succeed("test $(stat -c %a /run/tokendrain-auth/master-key) = 600")

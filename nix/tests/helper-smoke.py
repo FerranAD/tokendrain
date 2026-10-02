@@ -141,6 +141,19 @@ def wait_lan_policy(prefix: str, present: bool) -> None:
 
 
 def main() -> None:
+    diagnostics = {check["name"]: check for check in helper("diagnostics", {})}
+    for name in (
+        "kvm",
+        "tun",
+        "firecracker",
+        "ip",
+        "nft",
+        "guest_artifacts",
+        "cgroup_v2",
+        "ipv4_forwarding",
+    ):
+        assert diagnostics[name]["ok"], diagnostics[name]
+        assert diagnostics[name]["scope"] == "helper", diagnostics[name]
     handles: list[dict[str, Any]] = []
     first_project = project()
     try:
