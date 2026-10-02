@@ -1,4 +1,7 @@
-# Resume checkpoint
+# Archived restart checkpoint
+
+This file records an earlier interrupted session. Its incomplete-work list is historical.
+The implemented application and current validation status are described in README.md and TASKS.md.
 
 The user asked to stop gracefully and restart Codex so KVM/TUN may become accessible.
 Continue the original full implementation request. Do not settle for the checkpoint.

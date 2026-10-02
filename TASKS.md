@@ -4,15 +4,15 @@
 Deliver the NixOS-hosted daemon, persistent isolated Firecracker projects, Codex execution,
 credential brokers, web interface, schedules, reports, and tested recovery paths.
 
-## Work in progress
-- [ ] Platform: flake, NixOS module, reproducible microvm.nix guest, privileged helper.
-- [ ] Host: relational migrations, API, project/run state machines, scheduling, SSE.
-- [ ] Execution: persistent disks, exclusive leases, snapshots, isolated networking.
-- [ ] Codex: typed RPC, guest protocol, unsupervised loop, usage predicates, reports.
-- [ ] Credentials: current SIWC flow, import compatibility, refresh locking, GitHub Apps.
-- [ ] UI: dashboard, projects, runs, schedules, settings, integration and storage controls.
-- [ ] Validation: Python unit/integration checks, frontend build, Nix evaluation/build.
-- [ ] Documentation: installation, operations, threat model and real KVM test procedure.
+## Implementation checklist
+- [x] Platform: flake, NixOS module, reproducible microvm.nix guest, privileged helper.
+- [x] Host: relational migrations, API, project/run state machines, scheduling, SSE.
+- [x] Execution: persistent disks, exclusive leases, snapshots, isolated networking.
+- [x] Codex: typed RPC, guest protocol, unsupervised loop, usage predicates, reports.
+- [x] Credentials: current SIWC flow, import compatibility, refresh locking, GitHub Apps.
+- [x] UI: dashboard, projects, runs, schedules, settings, integration and storage controls.
+- [x] Validation: Python unit/integration checks, frontend build, Nix evaluation/build.
+- [x] Documentation: installation, operations, threat model and real KVM test procedure.
 
 ## Evidence and decisions
 - 2026-10-02: Repository initially contains only a README. Nix available; Python/Node
@@ -59,6 +59,49 @@ no commit was created. Resume session can commit if Git metadata becomes writabl
 - Ten new host integration tests pass (API, migrations, scoped GitHub token locking).
 - Full NixOS module HTTP smoke passes: packaged UI, authenticated CLI/API, migrations,
   helper readiness, runtime credential permissions and clean service stop.
-- Remaining: run-supervisor edge tests/recovery fixes, live browser against actual API,
-  final app security review and complete quality gates. Live OAuth/inference/GitHub
-  credential verification remains external; no implementation-session secrets are reused.
+- At this intermediate milestone, supervisor recovery tests, the live browser flow,
+  security review and final quality gates were still pending; all completed below.
+  Live OAuth/inference/GitHub verification remains external; implementation-session
+  credentials have never been reused.
+
+## Final integration review
+
+- Actual browser against the daemon verified project/task/feedback/secrets/snapshot/restore/resize,
+  run reports and SSE, history, scheduling and settings. Eleven Chromium tests pass.
+- Provider sign-in host identity now uses the officially required stable UUID URI format.
+- Project deletion and Run admission share SQLite writer transactions to prevent deletion races.
+- Reviewed credential cancellation durability, shutdown failure reporting, database-failure cleanup,
+  notification backpressure and automatic daemon restart on background failure. Fixes and regression
+  tests are committed. Generic secret edits serialize with Run admission and preserve committed
+  references when a database commit is interrupted.
+
+## Final verification — 2026-10-02
+
+- Local Python suite: **119 passed**, with the opt-in KVM test selected separately.
+- Ruff lint and formatting clean; strict mypy passes across **57 source files**.
+- TypeScript, Prettier and Vite production build pass. **11 Chromium tests pass**,
+  including the actual HTTP daemon in explicit mock mode, reports and live events.
+- Nix builds of `tokendrain`, `tokendrain-guestd` and `guest-artifacts` pass.
+  The sandboxed Python package build runs **118 passed, 1 skipped** (local Codex
+  executable smoke unavailable in the build sandbox), with KVM deselected.
+- `nix flake check --no-build --all-systems` passes for x86_64-linux/aarch64-linux.
+  Actual guest and NixOS tests were executed on x86_64-linux.
+- Rebuilt direct Firecracker test: **1 passed in 18.36 seconds**, confirming fresh
+  boots, vsock/Codex control, workspace/home/Nix-state persistence, and tmpfs cleanup.
+- Rebuilt NixOS service test: **passed in 18.61 seconds**, including packaged UI,
+  authenticated CLI/API, migrations, key permissions and clean shutdown.
+- Rebuilt nested Firecracker/helper/network test: **passed in 133.50 seconds**,
+  including simultaneous guests, public egress, host/LAN/interguest isolation,
+  firewall reloads, route changes, helper recovery and orderly disk release.
+- Temporary browser-test daemon and VM tests stopped; no host firewall or NixOS
+  configuration was changed. Implementation and documentation are committed locally.
+
+### Remaining external acceptance
+
+Real user-account SIWC/import sign-in, actual model inference, multi-hour provider
+token renewal and GitHub branch/PR writes require credentials configured by the
+administrator through tokendrain. These are implemented and covered with fakes but
+are not claimed as live-tested. See [the acceptance checklist](docs/development.md#live-account-acceptance).
+Installation starts with [README.md](README.md); no runtime secrets belong in Git or
+the Nix store. Parallel implementation workers reached their provider usage limit
+during finalization; the main session completed all remaining local checks.
