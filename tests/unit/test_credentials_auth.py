@@ -363,3 +363,82 @@ def test_host_id_uses_official_opaque_identifier_formats() -> None:
     ]:
         with pytest.raises(ValueError, match="host ID"):
             validate_host_id(invalid)
+
+
+@pytest.mark.parametrize("later_action", ["replace", "delete"])
+async def test_cancelled_credential_write_cannot_overtake_next_mutation(
+    tmp_path: Path,
+    later_action: str,
+) -> None:
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowStore(EncryptedFileCredentialStore):
+        def _write(self, name: str, value: bytes) -> None:
+            if value == b"first":
+                entered.set()
+                if not release.wait(3):
+                    raise TimeoutError("test worker was not released")
+            super()._write(name, value)
+
+    store = SlowStore(tmp_path / "credentials", secrets.token_bytes(32))
+    first = asyncio.create_task(store.put("credential", b"first"))
+    later = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        first.cancel()
+        await asyncio.sleep(0)
+        later = asyncio.create_task(
+            store.put("credential", b"replacement")
+            if later_action == "replace"
+            else store.delete("credential")
+        )
+        await asyncio.sleep(0)
+        assert not first.done() and not later.done()
+        # Repeated owner cancellation still cannot release the credential lock.
+        first.cancel()
+        await asyncio.sleep(0)
+        assert not first.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await later
+        assert await store.get("credential") == (
+            b"replacement" if later_action == "replace" else None
+        )
+    finally:
+        release.set()
+        await asyncio.gather(first, *([later] if later else []), return_exceptions=True)
+
+
+async def test_cancelled_credential_delete_cannot_remove_replacement(tmp_path: Path) -> None:
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowStore(EncryptedFileCredentialStore):
+        def _delete(self, name: str) -> None:
+            entered.set()
+            if not release.wait(3):
+                raise TimeoutError("test worker was not released")
+            super()._delete(name)
+
+    store = SlowStore(tmp_path / "credentials", secrets.token_bytes(32))
+    await store.put("credential", b"old")
+    deleting = asyncio.create_task(store.delete("credential"))
+    replacing = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        deleting.cancel()
+        replacing = asyncio.create_task(store.put("credential", b"new"))
+        await asyncio.sleep(0)
+        assert not deleting.done() and not replacing.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await deleting
+        await replacing
+        assert await store.get("credential") == b"new"
+    finally:
+        release.set()
+        await asyncio.gather(deleting, *([replacing] if replacing else []), return_exceptions=True)

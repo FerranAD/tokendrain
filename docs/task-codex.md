@@ -1,7 +1,7 @@
 # Codex, authentication and guest implementation task log
 
 - [x] Inspected current official SIWC registration, session, identity and app-server docs; inspected Codex auth file source.
-- [x] Typed asynchronous bidirectional JSON-RPC with request ownership, deadlines, notification backpressure, connection failure and server requests.
+- [x] Typed asynchronous bidirectional JSON-RPC with request ownership, deadlines, bounded notification buffering, connection failure and server requests.
 - [x] Versioned framed host/guest protocol over Firecracker vsock handshake, with development Unix transport.
 - [x] Guest process supervisor; runtime-only credentials; no approval/full-access Codex configuration; GitHub helper and token rotation; restart/resume without turn replay.
 - [x] Public-client SIWC dynamic registration, S256 PKCE, one-shot encrypted state, OIDC JWT verification, per-account central refresh lock, revocation and returning account validation.
@@ -118,3 +118,17 @@ Host ID validation now follows the official SIWC overview: canonical UUIDv4 URN,
 JWK thumbprint URI, or did:key identifier. Root application generates/persists
 UUIDv4 URNs. Auth tests now use the actual URI format and assert it appears in
 ext_agent_host_id rather than permitting placeholder host labels.
+
+## Cancellation and transport audit
+
+Credential mutations now retain their store lock until filesystem work completes,
+including repeated task cancellation. Atomic writes and deletions fsync their
+parent directory; an old cancelled write cannot resurrect deleted credentials or
+overtake a rotated refresh token. Deterministic worker-blocking tests cover both
+write and deletion cancellation followed by a competing mutation.
+
+RPC readers never wait for notification consumers, so output floods cannot block
+the response a consumer is currently awaiting. Only explicitly listed output
+fragments may be dropped on saturation; critical overflow closes the transport
+with an explicit recovery error. A regression delivers 300 notifications before
+a response and proves the response completes with the bounded queue full.

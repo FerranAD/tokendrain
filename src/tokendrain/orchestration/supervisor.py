@@ -243,13 +243,17 @@ class Supervisor:
             return elapsed_before + time.monotonic() - clock_started
 
         async def emit(message: str) -> None:
-            await self.events.publish(
-                "execution.log",
-                message,
-                run_id=run_id,
-                project_id=project_id,
-                execution_id=execution_id,
-            )
+            try:
+                await self.events.publish(
+                    "execution.log",
+                    message,
+                    run_id=run_id,
+                    project_id=project_id,
+                    execution_id=execution_id,
+                )
+            except Exception:
+                # A full/broken database must never prevent VM teardown.
+                log.warning("execution_event_persist_failed", extra={"execution_id": execution_id})
 
         async def observe(value: list[UsageWindow]) -> None:
             nonlocal windows
@@ -411,12 +415,19 @@ class Supervisor:
                     error_text = redactor.redact(f"{type(error).__name__}: {error}")
                     await emit(error_text)
                 finally:
-                    async with self.sessions() as db:
-                        current_execution = await db.get(ProjectExecution, execution_id)
-                        assert current_execution
-                        current_state = ExecutionState(current_execution.status)
-                    if current_state != ExecutionState.QUEUED:
-                        await self.runs.transition(execution_id, ExecutionState.STOPPING)
+                    # Persist stopping when possible, but no DB/event write is
+                    # allowed to gate guest or VM cleanup (including disk-full).
+                    try:
+                        async with self.sessions() as db:
+                            current_execution = await db.get(ProjectExecution, execution_id)
+                            assert current_execution
+                            state = ExecutionState(current_execution.status)
+                        if state not in {ExecutionState.QUEUED, ExecutionState.STOPPING}:
+                            await self.runs.transition(execution_id, ExecutionState.STOPPING)
+                    except Exception as error:
+                        final = ExecutionState.FAILED
+                        error_text = f"Execution state persistence failed: {type(error).__name__}"
+                        await emit(error_text)
                     if session:
                         try:
                             await session.close()
@@ -433,20 +444,28 @@ class Supervisor:
                     if handle:
                         # A failed host stop MUST keep the project reservation active.
                         await self.vm.stop(handle)
+                    # Resource cleanup is confirmed. Retry persistence if its
+                    # earlier failure was transient; otherwise keep reservation.
+                    async with self.sessions() as db:
+                        current_execution = await db.get(ProjectExecution, execution_id)
+                        assert current_execution
+                        state = ExecutionState(current_execution.status)
+                    if state not in {ExecutionState.QUEUED, ExecutionState.STOPPING}:
+                        await self.runs.transition(execution_id, ExecutionState.STOPPING)
+                    if state == ExecutionState.QUEUED:
+                        final = ExecutionState.FAILED
                     report.usage = ReportUsage(start=starting_windows, end=windows)
                     if final in {ExecutionState.FAILED, ExecutionState.CANCELLED}:
                         report.status = "failed" if final == ExecutionState.FAILED else "cancelled"
                         report.blockers.append(error_text or "Infrastructure interrupted execution")
                     await self.save_report(execution_id, project_id, report, original_task_log)
-                    if current_state == ExecutionState.QUEUED:
-                        final = ExecutionState.FAILED
                     await self.runs.transition(execution_id, final, error_text)
         except asyncio.CancelledError:
             # Cancellation while waiting for the lease never attached disks.
             async with self.sessions() as db:
                 live = await db.get(ProjectExecution, execution_id)
-                state = ExecutionState(live.status) if live else None
-            if state == ExecutionState.QUEUED:
+                cancelled_state = ExecutionState(live.status) if live else None
+            if cancelled_state == ExecutionState.QUEUED:
                 await self.runs.transition(
                     execution_id,
                     ExecutionState.CANCELLED if cancel.is_set() else ExecutionState.FAILED,

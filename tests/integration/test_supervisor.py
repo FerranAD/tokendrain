@@ -20,6 +20,7 @@ from tokendrain.db.engine import migrate, open_database
 from tokendrain.db.models import Event, Run, Schedule
 from tokendrain.domain import (
     ElapsedStop,
+    ExecutionState,
     ProjectConfig,
     ProjectCreate,
     ProjectPatch,
@@ -407,3 +408,42 @@ async def test_dispatcher_enforces_run_parallelism_and_global_concurrency(
         owner.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await owner
+
+
+async def test_stopping_database_failure_cannot_skip_vm_cleanup(harness: Harness) -> None:
+    class FailingTransition(RunService):
+        failed = False
+
+        async def transition(
+            self, execution_id: str, state: ExecutionState, error: str | None = None
+        ) -> None:
+            if state == ExecutionState.STOPPING and not self.failed:
+                self.failed = True
+                raise OSError("database disk full")
+            await super().transition(execution_id, state, error)
+
+    _, run, execution = await harness.run()
+    harness.supervisor.runs = FailingTransition(harness.sessions, harness.events)
+    await harness.supervisor.execute(execution, asyncio.Event())
+    assert harness.session.closed and not harness.vm.handles
+    result = await harness.runs.get(run)
+    assert result["status"] == "failed"
+    assert "persistence failed" in result["executions"][0]["error"]
+
+
+async def test_guest_shutdown_failure_is_failed_even_if_vm_teardown_succeeds(
+    harness: Harness,
+) -> None:
+    class BadClose(ScriptSession):
+        async def close(self) -> None:
+            self.closed = True
+            raise ConnectionError("guest rejected shutdown")
+
+    session = BadClose()
+    harness.supervisor.factory = ScriptFactory(session)
+    _, run, execution = await harness.run()
+    await harness.supervisor.execute(execution, asyncio.Event())
+    assert session.closed and not harness.vm.handles
+    result = await harness.runs.get(run)
+    assert result["status"] == "failed"
+    assert "shutdown failed" in result["executions"][0]["error"]

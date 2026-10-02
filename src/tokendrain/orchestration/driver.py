@@ -1,7 +1,6 @@
 """A work session owns one guest connection and never blindly retries a turn."""
 
 import asyncio
-import contextlib
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -480,11 +479,16 @@ class RealSession:
                     )
 
     async def close(self) -> None:
-        if hasattr(self, "guest"):
-            with contextlib.suppress(Exception):
-                async with asyncio.timeout(20):
-                    await self.guest.request("codex_stop")
-                    await self.guest.request("credentials_clear")
-                    await self.guest.request("shutdown")
-            await self.guest.close()
-        self.runtime_secrets.clear()
+        try:
+            if hasattr(self, "guest"):
+                try:
+                    async with asyncio.timeout(20):
+                        await self.guest.request("codex_stop")
+                        await self.guest.request("credentials_clear")
+                        await self.guest.request("shutdown")
+                finally:
+                    # Close transport even when lifecycle RPC failed; callers
+                    # must see that failure instead of claiming clean completion.
+                    await self.guest.close()
+        finally:
+            self.runtime_secrets.clear()

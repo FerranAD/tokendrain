@@ -42,8 +42,12 @@ IDs are request-correlated and scoped to each connection. Notifications have no
 ID. Both peers can initiate requests; no request is blindly retried on connection
 loss. Each request has a deadline. Errors fail the pending operation rather than
 pretending it succeeded. Disconnect fails every pending request. Notification
-queues are bounded to 256 events and 16 MiB with backpressure and do not silently
-drop terminal events. Accumulated report text is limited to 8 MiB per turn.
+queues are bounded to 256 events and 16 MiB. When saturated, known output deltas
+and diagnostic log fragments may be dropped; `codex_status.dropped_output_events`
+reports the guest-side count. RPC responses continue to be dispatched. Saturation
+by a critical event explicitly closes the connection and requires state recovery;
+terminal events are never silently discarded. Completed items contain final text.
+Accumulated report text is limited to 8 MiB per turn.
 
 ## Operations
 

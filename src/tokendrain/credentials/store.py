@@ -11,6 +11,8 @@ from typing import Protocol
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from tokendrain.asyncio_utils import durable_io
+
 _NAME = re.compile(r"^[a-zA-Z0-9_.-]{1,150}$")
 _HEADER = b"TDCR\x01"
 
@@ -76,7 +78,7 @@ class EncryptedFileCredentialStore:
 
     async def put(self, name: str, value: bytes) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._write, name, value)
+            await durable_io(self._write, name, value)
 
     def _read(self, name: str) -> bytes | None:
         path = self._path(name)
@@ -91,9 +93,20 @@ class EncryptedFileCredentialStore:
     async def get(self, name: str) -> bytes | None:
         return await asyncio.to_thread(self._read, name)
 
+    def _delete(self, name: str) -> None:
+        try:
+            self._path(name).unlink()
+        except FileNotFoundError:
+            return
+        directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
     async def delete(self, name: str) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._path(name).unlink, missing_ok=True)
+            await durable_io(self._delete, name)
 
     async def names(self) -> list[str]:
         def scan() -> list[str]:

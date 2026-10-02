@@ -145,3 +145,36 @@ async def test_notification_queue_bounds_bytes_and_releases_backpressure() -> No
     assert 0 < queue.queued_bytes <= 100
     with pytest.raises(ValueError, match="byte limit"):
         await queue.put(RpcNotification(method="log", params={"line": "x" * 500}))
+
+
+async def test_output_flood_cannot_block_rpc_response_and_critical_overflow_is_explicit(
+    tmp_path: Path,
+) -> None:
+    peers: list[JsonRpcPeer] = []
+
+    async def handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        for _ in range(300):
+            await peers[0].notify("item/agentMessage/delta", {"delta": "stream fragment"})
+        return {"delivered": True}
+
+    async def accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        peer = JsonRpcPeer(reader, writer, request_handler=handle)
+        peers.append(peer)
+        await peer.start()
+
+    server = await asyncio.start_unix_server(accept, tmp_path / "flood.sock")
+    async with server:
+        reader, writer = await asyncio.open_unix_connection(tmp_path / "flood.sock")
+        peer = JsonRpcPeer(reader, writer)
+        await peer.start()
+        try:
+            result = await asyncio.wait_for(peer.request("burst"), 1)
+            assert result == {"delivered": True}
+            assert peer.notifications.qsize() == 256 and peer.dropped_output_events == 44
+            await peers[0].notify("turn/completed", {"turn": {"id": "turn", "status": "completed"}})
+            await asyncio.wait_for(peer.closed.wait(), 1)
+            assert peer.failure and "overloaded" in str(peer.failure)
+        finally:
+            await peer.close()
+            for remote in peers:
+                await remote.close()

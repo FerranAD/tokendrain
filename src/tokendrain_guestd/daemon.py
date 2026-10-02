@@ -324,6 +324,7 @@ class GuestDaemon:
                 "turn_id": self._active_turn,
                 "workspace": str(self.workspace),
                 "codex_home": str(self.codex_home),
+                "dropped_output_events": self.codex.dropped_output_events if self.codex else 0,
             }
         if method == "credentials_set":
             if self.process:

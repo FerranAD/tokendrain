@@ -172,3 +172,33 @@ async def test_token_rotation_interrupts_once_and_resumes_existing_thread() -> N
     assert rotation["access_token"] == "replacement-access"
     assert sum(method == "turn/start" for method, _ in guest.requests) == 1
     await session.close()
+
+
+async def test_failed_shutdown_propagates_and_always_closes_transport() -> None:
+    import pytest
+
+    from tokendrain.codex.rpc import RpcError
+
+    class BadShutdown(Guest):
+        async def request(
+            self, method: str, params: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
+            if method == "codex_stop":
+                raise RpcError(-32000, "guest stop failed")
+            return await super().request(method, params)
+
+    guest = BadShutdown()
+
+    async def noop(*args: Any) -> None:
+        pass
+
+    session = await RealSessionFactory(Auth(), connector=Connector([guest])).connect(
+        VmHandle(execution_id="e", project_id="p", vsock_path=Path("/unused")),
+        {"EXAMPLE": "value"},
+        noop,
+        noop,
+        noop,
+    )
+    with pytest.raises(RpcError, match="stop failed"):
+        await session.close()
+    assert guest.closed.is_set()

@@ -43,3 +43,16 @@ Ruff passes and strict mypy reports no issues in 16 owned modules.
 Real infrastructure validation is tracked separately in task-infra.md. Live
 OpenAI authorization/entitlements/refresh still require a configured account;
 the implementation agent's account has not been reused.
+
+## Teardown audit
+
+Guest lifecycle errors now propagate while transport closure remains guaranteed.
+A failed guest stop cannot become a successful execution. STOPPING persistence
+and event logging are best-effort before cleanup: even a full database cannot
+prevent guest cleanup or host VM stop. Terminal persistence happens only after
+resource teardown is confirmed; unresolved database failure retains the existing
+reservation for startup reconciliation. Regression tests inject a STOPPING write
+failure and a guest shutdown failure, verifying cleanup and failed results.
+
+Audit validation: 53 credential, protocol, session, supervisor, guest lifecycle and
+account-probe tests pass; Ruff is clean and mypy passes all 11 affected modules.

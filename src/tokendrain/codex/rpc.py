@@ -16,6 +16,16 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 JsonObject = dict[str, Any]
+LOSSY_NOTIFICATIONS = frozenset(
+    {
+        "item/agentMessage/delta",
+        "item/commandExecution/outputDelta",
+        "item/fileChange/outputDelta",
+        "item/reasoning/textDelta",
+        "item/reasoning/summaryTextDelta",
+        "guest/log",
+    }
+)
 
 
 class RpcNotification(BaseModel):
@@ -88,6 +98,7 @@ class JsonRpcPeer:
         self._handlers: set[asyncio.Task[None]] = set()
         self.closed = asyncio.Event()
         self.failure: BaseException | None = None
+        self.dropped_output_events = 0
 
     async def start(self) -> None:
         if self._reader_task is None:
@@ -177,8 +188,20 @@ class JsonRpcPeer:
                         self._handlers.add(task)
                         task.add_done_callback(self._handler_done)
                     else:
-                        # Bounded backpressure: never silently drop terminal events.
-                        await self.notifications.put(RpcNotification.model_validate(message))
+                        # The reader also dispatches RPC replies. Waiting for a
+                        # full event queue here deadlocks a caller awaiting RPC.
+                        notification = RpcNotification.model_validate(message)
+                        try:
+                            self.notifications.put_nowait(notification)
+                        except asyncio.QueueFull:
+                            if notification.method in LOSSY_NOTIFICATIONS:
+                                self.dropped_output_events += 1
+                            else:
+                                # Never silently lose completion, errors or quota
+                                # observations. Force explicit state recovery.
+                                raise ConnectionError(
+                                    "Codex event queue overloaded; state recovery required"
+                                ) from None
                 elif (pending := self._pending.get(message.get("id", -1))) is not None:
                     if pending.done():
                         continue
