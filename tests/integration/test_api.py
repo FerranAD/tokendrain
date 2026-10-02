@@ -389,3 +389,35 @@ async def test_restart_clears_stale_provider_operation(tmp_path):
             assert await db.get(Setting, "provider_change") is None
     finally:
         await second.close()
+
+
+async def test_secret_mutations_reject_reserved_project_and_preserve_values(api):
+    from tokendrain.secrets import SecretService
+
+    client, services = api
+    project_id = await new_project(client)
+    base = f"/api/v1/projects/{project_id}/secrets"
+    assert (
+        await client.put(base + "/TOKEN", json={"value": "original", "description": "test"})
+    ).status_code == 200
+    async with services.sessions() as db:
+        row = await db.get(SecretEntry, (project_id, "TOKEN"))
+        assert row
+        original_ref = row.credential_ref
+    assert (
+        await client.post("/api/v1/runs", json={"projects": [{"project_id": project_id}]})
+    ).status_code == 201
+    for response in [
+        await client.put(base + "/TOKEN", json={"value": "changed", "description": "new"}),
+        await client.put(base + "/TOKEN", json={"description": "changed purpose"}),
+        await client.delete(base + "/TOKEN"),
+    ]:
+        assert response.status_code == 409
+    assert await services.credentials.get(original_ref) == b"original"
+    # Cleanup after an uncertain commit must preserve an already referenced value.
+    secret_service = SecretService(services.sessions, services.credentials)
+    await services.credentials.put("orphan", b"discard")
+    await secret_service._discard_unreferenced([original_ref, "orphan"])
+    assert await services.credentials.get(original_ref) == b"original"
+    assert await services.credentials.get("orphan") is None
+    assert (await client.get(base)).json()[0]["description"] == "test"

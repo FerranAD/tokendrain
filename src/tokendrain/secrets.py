@@ -1,18 +1,21 @@
 """Project secret metadata lives in SQLite; values are never returned from this service."""
 
 import io
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
 from dotenv.parser import parse_stream
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tokendrain.credentials.store import CredentialStore
-from tokendrain.db.models import Project, SecretEntry
-from tokendrain.domain import utcnow
+from tokendrain.db.models import Project, ProjectExecution, SecretEntry
+from tokendrain.domain import TERMINAL, utcnow
+
+log = logging.getLogger(__name__)
 
 PROTECTED = {
     "HOME",
@@ -61,6 +64,44 @@ class SecretService:
     def __init__(self, sessions: async_sessionmaker[AsyncSession], store: CredentialStore) -> None:
         self.sessions, self.store = sessions, store
 
+    @staticmethod
+    async def _require_idle(db: AsyncSession, project_id: str) -> None:
+        if not await db.get(Project, project_id):
+            raise LookupError("Project not found")
+        if await db.scalar(
+            select(ProjectExecution.id)
+            .where(
+                ProjectExecution.project_id == project_id,
+                ProjectExecution.status.not_in([state.value for state in TERMINAL]),
+            )
+            .limit(1)
+        ):
+            raise ValueError("Project has an active or queued execution")
+
+    async def _discard_unreferenced(self, refs: list[str]) -> None:
+        if not refs:
+            return
+        try:
+            # Cancellation can arrive after SQLite committed but before its
+            # completion reached us. Serialize behind pending writers and inspect
+            # the actual committed references before deleting staged values.
+            async with self.sessions.begin() as db:
+                await db.execute(text("BEGIN IMMEDIATE"))
+                referenced = set(
+                    await db.scalars(
+                        select(SecretEntry.credential_ref).where(
+                            SecretEntry.credential_ref.in_(refs)
+                        )
+                    )
+                )
+        except Exception:
+            # An encrypted orphan is safe; deleting a possibly live value is not.
+            log.warning("secret_cleanup_deferred_database_unavailable")
+            return
+        for ref in refs:
+            if ref not in referenced:
+                await self.store.delete(ref)
+
     async def list_entries(self, project_id: str) -> list[dict[str, Any]]:
         async with self.sessions() as db:
             if not await db.get(Project, project_id):
@@ -88,12 +129,12 @@ class SecretService:
                     raise ValueError("A purpose/description is required for every secret")
                 if value is not None:
                     ref = f"secret-{uuid4().hex}"
-                    await self.store.put(ref, value.encode())
                     new_refs.append(ref)
+                    await self.store.put(ref, value.encode())
                     staged[name] = ref
             async with self.sessions.begin() as db:
-                if not await db.get(Project, project_id):
-                    raise LookupError("Project not found")
+                await db.execute(text("BEGIN IMMEDIATE"))
+                await self._require_idle(db, project_id)
                 for name, (_, description) in values.items():
                     row = await db.get(SecretEntry, (project_id, name))
                     if row:
@@ -113,17 +154,17 @@ class SecretService:
                             )
                         )
         except BaseException:
-            for ref in new_refs:
-                await self.store.delete(ref)
+            await self._discard_unreferenced(new_refs)
             raise
-        for ref in old_refs:
-            await self.store.delete(ref)
+        await self._discard_unreferenced(old_refs)
 
     async def delete(self, project_id: str, name: str) -> None:
         async with self.sessions.begin() as db:
+            await db.execute(text("BEGIN IMMEDIATE"))
+            await self._require_idle(db, project_id)
             row = await db.get(SecretEntry, (project_id, name))
             if not row:
                 raise LookupError("Secret not found")
             ref = row.credential_ref
             await db.delete(row)
-        await self.store.delete(ref)
+        await self._discard_unreferenced([ref])
