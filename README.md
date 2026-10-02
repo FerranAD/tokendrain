@@ -133,7 +133,9 @@ sudo journalctl -u tokendraind -u tokendrain-helper -f
 sudo journalctl -u 'tokendrain-vm-*' --since today
 ```
 
-The CLI needs access to the configured admin-token file for API commands. On an installed host, run it as the service user, for example `sudo -u tokendrain tokendrain status`. Use `sudo tokendrain doctor` for complete host diagnostics, including the root-owned master-key source; device visibility inside the hardened daemon differs from the host.
+The CLI needs access to the configured admin-token file for API commands. On an installed host, run it as the service user, for example `sudo -u tokendrain tokendrain status`. Status and the Settings page check application prerequisites inside the daemon and query the authenticated helper for VM prerequisites. The daemon deliberately cannot see KVM/TUN devices or run privileged networking tools. A missing or unreachable helper is reported as a failure.
+
+Use `sudo tokendrain doctor` for host diagnostics, including the root-owned master-key source and daemon/helper failures. Host and daemon filesystem views differ, so paths may differ between these commands. The host Nix CLI is useful for installation and development but is not a runtime requirement; the guest includes Nix for project development.
 
 Before reconnecting/importing/disconnecting OpenAI, replacing the GitHub App key, or refreshing GitHub installations, pause schedules and finish or cancel queued and active runs. The API reserves these account changes against new run creation. Normal automatic token refresh continues during executions.
 

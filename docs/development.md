@@ -41,6 +41,8 @@ For frontend hot reload, run `npm run dev` in `web/`. Vite serves `127.0.0.1:517
 
 The real backend is `firecracker` and requires the helper, immutable guest artifacts, a protected master-key file, and connected provider credentials. The NixOS module is the supported way to provision those boundaries. A development shell alone does not grant network administration or install the host firewall.
 
+System status runs application checks in the unprivileged daemon and requests VM checks through authenticated, read-only helper diagnostics. The daemon keeps `PrivateDevices` and has no Linux capabilities; its lack of KVM/TUN visibility or privileged tools is expected. Helper connection or prerequisite failures remain visible in status. `sudo tokendrain doctor` also inspects the host environment and reports service failures. Nix is needed for these development/build commands, but the installed daemon does not require a host `nix` executable at runtime.
+
 ## Python checks
 
 ```sh

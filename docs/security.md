@@ -12,7 +12,9 @@ Control-plane access grants authority to configure projects, allocate resources,
 
 ## Isolation
 
-The web daemon runs as `tokendrain` without Linux capabilities. A separate privileged helper exposes only VM start, stop, and list operations over a local Unix socket. It verifies peer credentials and accepts validated project/execution UUIDs plus bounded resource values. Requests cannot supply arbitrary host commands, filenames, mounts, or Firecracker configurations.
+The web daemon runs as `tokendrain` without Linux capabilities and keeps systemd's `PrivateDevices` isolation. A separate privileged helper exposes only VM start, stop, list, and read-only diagnostics operations over a local Unix socket. It verifies peer credentials and accepts validated project/execution UUIDs plus bounded resource values. Requests cannot supply arbitrary host commands, filenames, mounts, or Firecracker configurations.
+
+System status checks application prerequisites in the daemon's own environment and obtains VM prerequisites through the helper's authenticated diagnostics operation. That operation inspects fixed resources; callers cannot select paths or commands. An unavailable helper is a failed check. KVM/TUN visibility and privileged networking executables are not requirements of the web daemon, and diagnostics do not grant it additional device access or capabilities.
 
 The helper opens project disks through directory descriptors with `O_NOFOLLOW`, rejects non-regular/hardlinked images, and pins the descriptors before creating systemd bind mounts. The VMM runs as `tokendrain-vm` inside a restricted root-directory view with dropped capabilities, no-new-privileges, device restrictions, and cgroup limits. It does not see the application's credential store, master key, database, other project disks, or host home directories. The guest receives block devices rather than writable host directory shares.
 
