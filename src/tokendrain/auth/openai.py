@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import secrets
 import time
 import uuid
@@ -24,6 +25,30 @@ AUTHORIZE_URL = AUTH_ORIGIN + "/api/accounts/authorize"
 TOKEN_URL = AUTH_ORIGIN + "/api/accounts/oauth/token"
 RESOURCE = "https://api.openai.com/v1"
 SCOPES = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+
+
+def validate_host_id(value: str) -> None:
+    """Validate the documented opaque identifier formats; this is not proof of key ownership."""
+    if value.startswith("urn:uuid:"):
+        try:
+            identifier = uuid.UUID(value[9:])
+        except ValueError as error:
+            raise ValueError("OpenAI host ID must contain a canonical UUIDv4") from error
+        if identifier.version == 4 and value == identifier.urn:
+            return
+    elif match := re.fullmatch(
+        r"urn:ietf:params:oauth:jwk-thumbprint:sha-(256|384|512):([A-Za-z0-9_-]+)",
+        value,
+    ):
+        digest = match.group(2)
+        if len(digest) == {"256": 43, "384": 64, "512": 86}[match.group(1)]:
+            return
+    elif re.fullmatch(r"did:key:z[1-9A-HJ-NP-Za-km-z]{8,}", value):
+        return
+    raise ValueError(
+        "OpenAI host ID must be a canonical urn:uuid UUIDv4, "
+        "JWK thumbprint URI, or did:key identifier"
+    )
 
 
 class AccountInfo(BaseModel):
@@ -87,6 +112,7 @@ class OpenAIAuthManager:
         *,
         runtime_dir: Path | None = None,
     ) -> None:
+        validate_host_id(host_id)
         self.store, self.http, self.host_id = store, http, host_id
         self.runtime_dir = runtime_dir
         self._locks: dict[str, asyncio.Lock] = {}

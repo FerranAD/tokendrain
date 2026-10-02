@@ -19,6 +19,8 @@ from tokendrain.auth.codex_import import decode_import
 from tokendrain.auth.openai import AccountRecord, OpenAIAuthManager, PendingAuthorization
 from tokendrain.credentials import EncryptedFileCredentialStore, SecretRedactor, load_master_key
 
+HOST_ID = "urn:uuid:12345678-1234-4234-9234-123456789abc"
+
 
 @pytest.fixture
 def store(tmp_path: Path) -> EncryptedFileCredentialStore:
@@ -90,7 +92,7 @@ async def test_refresh_is_serialized_and_saved_atomically(
     )
     await store.put("openai-account", record.model_dump_json().encode())
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        manager = OpenAIAuthManager(store, http, "host-1")
+        manager = OpenAIAuthManager(store, http, HOST_ID)
         results = await asyncio.gather(*(manager.runtime_credentials("account") for _ in range(20)))
         assert refreshes == 1
         assert all(result.access_token == "replacement" for result in results)
@@ -155,11 +157,11 @@ async def test_pkce_oidc_full_flow_and_replay_rejected(store: EncryptedFileCrede
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        manager = OpenAIAuthManager(store, http, "stable-host")
+        manager = OpenAIAuthManager(store, http, HOST_ID)
         attempt = await manager.begin_sign_in("http://127.0.0.1:8742/auth/callback")
         query = parse_qs(urlparse(attempt.url).query)
         assert query["client_id"] == ["dynamic_agent_client"]
-        assert query["ext_agent_host_id"] == ["stable-host"]
+        assert query["ext_agent_host_id"] == [HOST_ID]
         expected_challenge = query["code_challenge"][0]
         nonce = query["nonce"][0]
         info = await manager.complete_sign_in(attempt.state, "code", "oaiapp_issued")
@@ -206,7 +208,7 @@ async def test_oidc_rejects_nonce_mismatch(store: EncryptedFileCredentialStore) 
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(ValueError, match="nonce"):
-            await OpenAIAuthManager(store, http, "host")._validate_identity(
+            await OpenAIAuthManager(store, http, HOST_ID)._validate_identity(
                 token, "client", "right"
             )
 
@@ -217,7 +219,7 @@ async def test_invalid_callback_and_denial_do_not_exchange(
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _: pytest.fail("must not make HTTP request"))
     ) as http:
-        manager = OpenAIAuthManager(store, http, "host")
+        manager = OpenAIAuthManager(store, http, HOST_ID)
         with pytest.raises(ValueError, match="127.0.0.1"):
             await manager.begin_sign_in("https://public.example/auth/callback")
         attempt = await manager.begin_sign_in("http://127.0.0.1:8742/auth/callback")
@@ -265,7 +267,7 @@ async def test_refresh_failure_keeps_last_encrypted_state_and_never_returns_expi
         return httpx.Response(400, json={"error": "invalid_grant", "sensitive": "do-not-log"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        manager = OpenAIAuthManager(store, http, "host")
+        manager = OpenAIAuthManager(store, http, HOST_ID)
         with pytest.raises(ValueError, match="reconnect") as error:
             await manager.runtime_credentials("account")
         assert "do-not-log" not in str(error.value)
@@ -291,7 +293,7 @@ async def test_signout_clears_local_tokens_after_remote_failure(
         raise httpx.ConnectError("offline", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        manager = OpenAIAuthManager(store, http, "host")
+        manager = OpenAIAuthManager(store, http, HOST_ID)
         assert not await manager.sign_out("account")
         raw = await store.get("openai-account")
         assert raw
@@ -316,7 +318,7 @@ async def test_reimport_deduplicates_account_refresh_ownership(
         {"auth_mode": "chatgpt", "tokens": {"access_token": token, "refresh_token": "refresh"}}
     ).encode()
     async with httpx.AsyncClient() as http:
-        manager = OpenAIAuthManager(store, http, "host")
+        manager = OpenAIAuthManager(store, http, HOST_ID)
         accounts = await asyncio.gather(*(manager.import_auth_json(raw) for _ in range(5)))
         assert len({account.id for account in accounts}) == 1
         assert len(await manager.accounts()) == 1
@@ -336,7 +338,7 @@ async def test_default_runtime_account_skips_signed_out_accounts(
         )
         await store.put(f"openai-{name}", record.model_dump_json().encode())
     async with httpx.AsyncClient() as http:
-        manager = OpenAIAuthManager(store, http, "host")
+        manager = OpenAIAuthManager(store, http, HOST_ID)
         assert (await manager.runtime_credentials()).access_token == "b"
 
 
@@ -345,3 +347,19 @@ def test_redaction_covers_json_embedded_secret_values() -> None:
     redactor = SecretRedactor([secret])
     encoded = json.dumps({"summary": secret})
     assert redactor.redact(encoded) == '{"summary": "[REDACTED]"}'
+
+
+def test_host_id_uses_official_opaque_identifier_formats() -> None:
+    from tokendrain.auth.openai import validate_host_id
+
+    validate_host_id(HOST_ID)
+    validate_host_id("urn:ietf:params:oauth:jwk-thumbprint:sha-256:" + "a" * 43)
+    validate_host_id("did:key:z6Mk" + "a" * 40)
+    for invalid in [
+        "test-host",
+        "user@example.com",
+        "did:web:example.com",
+        "urn:uuid:12345678-1234-1234-9234-123456789abc",
+    ]:
+        with pytest.raises(ValueError, match="host ID"):
+            validate_host_id(invalid)

@@ -113,3 +113,8 @@ strict mypy across 16 modules, and Ruff. Host reports use a strict provider sche
 recovery reads/resumes persisted state without replaying side-effecting turns.
 Runtime-account selection excludes signed-out registrations. Notifications are
 bounded to 256 queued events and 16 MiB; turn report text is bounded to 8 MiB.
+
+Host ID validation now follows the official SIWC overview: canonical UUIDv4 URN,
+JWK thumbprint URI, or did:key identifier. Root application generates/persists
+UUIDv4 URNs. Auth tests now use the actual URI format and assert it appears in
+ext_agent_host_id rather than permitting placeholder host labels.

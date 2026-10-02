@@ -11,7 +11,10 @@ registers `tokendrain` using OpenAI's `dynamic_agent_client` entrypoint. No part
 key, client secret, or pre-registered developer client is needed. The browser lets
 you authorize use of your ChatGPT plan and returns an issued client identifier.
 Tokendrain retains that identifier with the validated account identity and reuses
-it on subsequent sign-ins. Each host has a stable independent host identifier.
+it on subsequent sign-ins. Each host has a stable independent host identifier. Tokendrain generates and
+persists a canonical `urn:uuid:<UUIDv4>` for this purpose. Arbitrary labels are
+not accepted by the OpenAI interface; other documented formats are RFC 9278 JWK
+thumbprint URIs and `did:key` identifiers.
 
 The current public-client flow requires an HTTP loopback callback with the exact
 host `127.0.0.1` and path `/auth/callback`. For a remote installation, open an SSH

@@ -15,6 +15,8 @@ from tokendrain.auth.process import isolated_codex
 from tokendrain.codex.client import CodexClient
 from tokendrain.credentials import EncryptedFileCredentialStore
 
+HOST_ID = "urn:uuid:12345678-1234-4234-9234-123456789abc"
+
 
 async def test_siwc_probe_uses_account_catalog_and_explicit_unavailable_usage(
     tmp_path: Path,
@@ -50,7 +52,7 @@ async def test_siwc_probe_uses_account_catalog_and_explicit_unavailable_usage(
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        probe = AuthProbe(OpenAIAuthManager(store, http, "host"), http, tmp_path / "runtime")
+        probe = AuthProbe(OpenAIAuthManager(store, http, HOST_ID), http, tmp_path / "runtime")
         result = await probe.read()
         assert [model.id for model in result.models] == ["visible-model"]
         assert result.models[0].supported_reasoning_efforts == ["medium"]
@@ -110,7 +112,7 @@ for line in sys.stdin:
     await store.put("openai-account", record.model_dump_json().encode())
     async with httpx.AsyncClient() as http:
         result = await AuthProbe(
-            OpenAIAuthManager(store, http, "host"), http, tmp_path / "runtime", str(executable)
+            OpenAIAuthManager(store, http, HOST_ID), http, tmp_path / "runtime", str(executable)
         ).read()
     assert result.models[0].id == "model"
     assert result.usage["rateLimits"]["primary"]["usedPercent"] == 12
