@@ -1,6 +1,34 @@
 # tokendrain
 
-**Persistent projects. Disposable agents. Useful work from your available Codex usage.**
+<p align="center">
+  <img src="docs/tokendrain-mark.svg" alt="tokendrain: a persistent workspace flowing into an isolated agent run" width="720" />
+</p>
+
+<p align="center">
+  <strong>Persistent projects. Disposable agents.</strong><br />
+  Put Codex to work on your own NixOS server, with each run in an isolated Firecracker microVM.
+</p>
+
+<p align="center">
+  <a href="https://github.com/FerranAD/tokendrain/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/FerranAD/tokendrain?style=flat&color=6ee7b7" /></a>
+  <a href="https://github.com/FerranAD/tokendrain/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/FerranAD/tokendrain?color=818cf8" /></a>
+  <a href="https://github.com/FerranAD/tokendrain/commits/main/"><img alt="Latest commit" src="https://img.shields.io/github/last-commit/FerranAD/tokendrain?color=38bdf8" /></a>
+  <img alt="NixOS" src="https://img.shields.io/badge/host-NixOS-5277C3?logo=nixos&logoColor=white" />
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" />
+</p>
+
+<p align="center">
+  <a href="#install-on-nixos">Get started</a> ·
+  <a href="#what-it-does">Features</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/security.md">Security</a>
+</p>
+
+---
+
+**A project keeps its workspace, tools, and task history between runs. Each run gets a fresh VM.** Define a goal, choose a model and stopping conditions, and let tokendrain continue the work on your own server.
+
+> Built for persistent autonomous work: runs execute without command-by-command approval inside disposable Firecracker microVMs. Review the [security model](docs/security.md) before connecting accounts or supplying secrets.
 
 Tokendrain is a self-hosted NixOS service that runs Codex autonomously inside Firecracker microVMs. Give a project a goal, choose a model and stopping conditions, and let it work. Its source tree, installed tools, task log, and reports remain available for the next run.
 
