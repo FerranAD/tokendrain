@@ -296,7 +296,7 @@ function Dashboard() {
     <>
       <PageTitle
         title="Usage & runs"
-        description="Your allowance, active work, and what’s next."
+        description="Current usage, active runs, and what’s next."
         actions={
           <Link className="button primary" href="/prepare">
             <NavIcon name="play" /> Prepare run
@@ -305,17 +305,14 @@ function Dashboard() {
       />
       <section className="dashboard-section">
         <div className="section-heading">
-          <h2>Provider allowance</h2>
+          <h2>Usage limits</h2>
           <Link className="text-link" href="/settings">
             Manage connection ↗
           </Link>
         </div>
         <ErrorNotice error={usage.error} />
         <UsageCards windows={usage.data ?? []} />
-        <p className="tiny muted">
-          Reported by Codex. Windows use provider metadata; usage may be shared with your other
-          Codex sessions.
-        </p>
+        <p className="tiny muted">Includes usage from your other Codex sessions.</p>
       </section>
       <div className="dashboard-stats">
         <div>

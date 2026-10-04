@@ -32,14 +32,14 @@ const second = {
 const windows = [
   {
     limit_id: 'codex',
-    name: 'General allowance',
+    name: 'General usage',
     used_percent: 32.5,
     window_minutes: 720,
     resets_at: '2026-10-03T08:00:00Z',
   },
   {
     limit_id: 'codex',
-    name: 'Long allowance',
+    name: 'Long-term usage',
     used_percent: 62,
     window_minutes: 20160,
     resets_at: '2026-10-16T08:00:00Z',
@@ -187,7 +187,7 @@ test('run preparation serializes per-project models and actual usage windows', a
     .nth(1)
     .selectOption('codex-other');
   await page.getByRole('combobox', { name: 'Reasoning', exact: true }).nth(1).selectOption('high');
-  await page.getByRole('checkbox', { name: /General allowance.*12 hours/ }).check();
+  await page.getByRole('checkbox', { name: /General usage.*12 hours/ }).check();
   await page.getByRole('spinbutton', { name: 'Usage threshold percent' }).first().fill('88');
   await page.getByRole('checkbox', { name: 'Elapsed runtime reaches' }).check();
   await page.getByRole('spinbutton', { name: 'Runtime limit in hours' }).fill('2.5');
@@ -558,6 +558,32 @@ test('appearance follows system and persists an explicit theme', async ({ page }
   await page.getByRole('button', { name: 'System theme', exact: true }).click();
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('mobile appearance stays in the top-right and cycles through all modes', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: 'light' });
+  const { errors } = await fixture(page);
+  await page.goto('/');
+  const control = page.getByRole('button', { name: /^Appearance:/ });
+  await expect(control).toHaveAttribute('data-mode', 'system');
+  await expect(page.getByRole('group', { name: 'Appearance', exact: true })).toBeHidden();
+  const bounds = await control.boundingBox();
+  expect(bounds?.x).toBeGreaterThan(320);
+  expect(bounds?.y).toBeLessThan(30);
+  await control.click();
+  await expect(control).toHaveAttribute('data-mode', 'light');
+  await control.click();
+  await expect(control).toHaveAttribute('data-mode', 'dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.reload();
+  await expect(control).toHaveAttribute('data-mode', 'dark');
+  await page.screenshot({ path: 'test-results/mobile-theme.png', fullPage: true });
+  await control.click();
+  await expect(control).toHaveAttribute('data-mode', 'system');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
 });
 
 test('unsaved changes warn on tabs and navigation and clear after saving', async ({ page }) => {

@@ -18,6 +18,26 @@ function apply(theme: Theme) {
 }
 apply(readTheme());
 
+function ThemeIcon({ theme }: { theme: Theme }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      {theme === 'light' ? (
+        <>
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" />
+        </>
+      ) : theme === 'dark' ? (
+        <path d="M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z" />
+      ) : (
+        <>
+          <rect x="3" y="4" width="18" height="13" rx="2" />
+          <path d="M8 21h8m-4-4v4" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export function ThemeControl() {
   const [theme, setTheme] = useState<Theme>(readTheme);
   useEffect(() => {
@@ -32,8 +52,29 @@ export function ThemeControl() {
       window.removeEventListener('storage', storage);
     };
   }, [theme]);
+  function chooseTheme(value: Theme) {
+    setTheme(value);
+    try {
+      if (value === 'system') localStorage.removeItem('tokendrain.theme');
+      else localStorage.setItem('tokendrain.theme', value);
+    } catch {
+      /* Keep the in-memory preference. */
+    }
+  }
+  const nextTheme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system';
+  const cycleLabel = `Appearance: ${theme}. Switch to ${nextTheme} theme`;
   return (
     <div className="theme-control">
+      <button
+        className="theme-cycle"
+        type="button"
+        aria-label={cycleLabel}
+        title={cycleLabel}
+        data-mode={theme}
+        onClick={() => chooseTheme(nextTheme)}
+      >
+        <ThemeIcon theme={theme} />
+      </button>
       <span>Appearance</span>
       <div className="theme-options" role="group" aria-label="Appearance">
         {(['light', 'dark', 'system'] as const).map((value) => {
@@ -45,31 +86,9 @@ export function ThemeControl() {
               aria-label={label}
               title={label}
               aria-pressed={theme === value}
-              onClick={() => {
-                setTheme(value);
-                try {
-                  if (value === 'system') localStorage.removeItem('tokendrain.theme');
-                  else localStorage.setItem('tokendrain.theme', value);
-                } catch {
-                  /* Keep the in-memory preference. */
-                }
-              }}
+              onClick={() => chooseTheme(value)}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                {value === 'light' ? (
-                  <>
-                    <circle cx="12" cy="12" r="4" />
-                    <path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" />
-                  </>
-                ) : value === 'dark' ? (
-                  <path d="M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z" />
-                ) : (
-                  <>
-                    <rect x="3" y="4" width="18" height="13" rx="2" />
-                    <path d="M8 21h8m-4-4v4" />
-                  </>
-                )}
-              </svg>
+              <ThemeIcon theme={value} />
             </button>
           );
         })}

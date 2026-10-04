@@ -45,8 +45,8 @@ function OpenAISettings() {
       </div>
       <ErrorNotice error={status.error || status.data?.credential_error} />
       <p className="muted">
-        Connect your ChatGPT account so Codex can use your available allowance. Long-lived
-        credentials stay encrypted on this host. Project VMs receive temporary access tokens.
+        Import your Codex credentials to run projects with your subscription. Long-lived credentials
+        stay encrypted on this host. Project VMs receive temporary access tokens.
       </p>
       {status.data?.connected && (
         <div className="callout">

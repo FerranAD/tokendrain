@@ -137,7 +137,7 @@ export function conditionLabel(condition: StopCondition) {
 
 function resetIn(value: string) {
   const minutes = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 60000));
-  if (minutes === 0) return 'reset due';
+  if (minutes === 0) return 'now';
   if (minutes >= 1440)
     return `in ${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`;
   return `in ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
@@ -166,14 +166,13 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
                   ? 'Weekly'
                   : window.name || window.limit_id}
             </span>
-            <span className="usage-window-label">Usage window</span>
-          </div>
-          <div className="usage-total">
-            <span className="usage-value">
-              {window.used_percent.toFixed(1)}
-              <small>%</small>
-            </span>
-            <span className="usage-used">used</span>
+            <div className="usage-total">
+              <span className="usage-value">
+                {window.used_percent.toFixed(1)}
+                <small>%</small>
+              </span>
+              <span className="usage-used">used</span>
+            </div>
           </div>
           <div
             className="meter"
@@ -193,10 +192,8 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
               {Math.max(0, 100 - window.used_percent).toFixed(1)}% remaining ·{' '}
               {duration(window.window_minutes)} window
             </span>
-            <span>
-              {window.resets_at
-                ? `Resets ${date(window.resets_at)} · ${resetIn(window.resets_at)}`
-                : 'Reset not supplied'}
+            <span title={window.resets_at ? date(window.resets_at) : undefined}>
+              {window.resets_at ? `Resets ${resetIn(window.resets_at)}` : 'Reset not supplied'}
             </span>
           </div>
         </article>

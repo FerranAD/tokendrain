@@ -509,8 +509,8 @@ export function RunBuilder({
           <span>
             <strong>Graceful stop</strong>
             <span className="hint">
-              Ask the agent to wrap up and save a checkpoint. May use a little more allowance (up to
-              90 seconds).
+              Ask the agent to wrap up and save a checkpoint. May go slightly past the usage limit
+              while finishing (up to 90 seconds).
             </span>
           </span>
         </label>
