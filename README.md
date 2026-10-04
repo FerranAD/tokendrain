@@ -220,3 +220,14 @@ npm test
 See [development instructions](docs/development.md) for KVM/NixOS integration tests and live-provider acceptance checks.
 
 MIT licensed. See [LICENSE](LICENSE).
+
+## Browse the documentation
+
+The repository includes a searchable documentation website with installation, usage, operations, integration, and developer guides. Preview it locally:
+
+```sh
+nix develop
+uv run --locked --group docs mkdocs serve --dev-addr 127.0.0.1:8000
+```
+
+Open `http://127.0.0.1:8000`. See [website instructions](docs/website.md) to build the static site or edit its content.
