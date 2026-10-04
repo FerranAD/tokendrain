@@ -29,13 +29,14 @@ cd ..
 Start an isolated development instance from the repository root:
 
 ```sh
+TOKENDRAIN_AUTH_MODE=none \
 TOKENDRAIN_BACKEND=mock \
 TOKENDRAIN_STATE_DIR="$PWD/.dev-state" \
 TOKENDRAIN_WEB_DIR="$PWD/web/dist" \
 uv run tokendraind
 ```
 
-Open `http://127.0.0.1:8742` and sign in using `.dev-state/admin-token`. Mock mode creates a development key in that private state directory. Its execution report explicitly describes simulation and stops as blocked; it does not spend provider usage. Never point mock mode at production state.
+Open `http://127.0.0.1:8742`; this local example disables login. For token mode supply `TOKENDRAIN_ADMIN_TOKEN_FILE` yourself. Mock mode creates a development key in that private state directory. Its execution report explicitly describes simulation and stops as blocked; it does not spend provider usage. Never point mock mode at production state.
 
 For frontend hot reload, run `npm run dev` in `web/`. Vite serves `127.0.0.1:5173` and proxies `/api` to the daemon on port 8742. Start the daemon with `TOKENDRAIN_PUBLIC_URL=http://127.0.0.1:5173` when using that frontend so browser Origin checks agree. Use `127.0.0.1` consistently instead of switching between it and `localhost`.
 
@@ -112,13 +113,13 @@ The module smoke boots the service and checks its HTTP health endpoint. The Fire
 
 Provider mocks, the installed Codex protocol smoke, and real guest boots pass without borrowing developer credentials. These checks still require accounts configured by the administrator through tokendrain:
 
-1. Complete Sign in with ChatGPT and separately exercise the advanced import path with an eligible Codex account.
+1. Import auth.json from an eligible Codex account in Settings.
 2. Run a small disposable project with an available model, inspect its output and report, then run it again to verify continuation using real inference.
 3. Keep a run active through token expiry to validate actual provider refresh and thread recovery. Mock tests cover the protocol and locking; they cannot establish account entitlement or provider behavior.
 4. Inspect the account's actual usage windows and exercise a matching budget threshold. Use duration or provider exhaustion if the connected provider does not expose percentage windows.
 5. Install a self-owned GitHub App on a disposable repository, grant a limited project scope, and verify a branch push and pull request. Repeat through installation-token renewal.
 
-Live sign-in, paid/plan inference, multi-hour provider rotation and GitHub writes have not been performed as part of the automated test suite. Keep those acceptance runs separate from production projects.
+Live credential import, paid/plan inference, multi-hour provider rotation and GitHub writes have not been performed as part of the automated test suite. Keep those acceptance runs separate from production projects.
 
 ## Nix build outputs
 
@@ -148,4 +149,4 @@ For a guest change, rebuild `guest-artifacts` before the KVM test. For a Python 
 | `modules`, `nix` | NixOS deployment, guest image and VM tests |
 | `tests` | Python unit and integration tests |
 
-External interfaces are version-sensitive. Check official provider documentation and the pinned executable's generated schema before changing SIWC, Codex JSON-RPC, Firecracker, microvm.nix, or GitHub behavior. The [OpenAI](openai-auth.md), [GitHub](github-app.md), [guest protocol](guest-protocol.md), and [microVM](microvms.md) documents record implemented semantics and source links.
+External interfaces are version-sensitive. Check official provider documentation and the pinned executable's generated schema before changing Codex JSON-RPC, Firecracker, microvm.nix, or GitHub behavior. The [OpenAI](openai-auth.md), [GitHub](github-app.md), [guest protocol](guest-protocol.md), and [microVM](microvms.md) documents record implemented semantics and source links.

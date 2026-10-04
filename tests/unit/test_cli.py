@@ -26,7 +26,7 @@ def settings(tmp_path: Path) -> Settings:
     token = tmp_path / "admin-token"
     token.write_text("administrative-test-token-only-123456789")
     token.chmod(0o600)
-    return Settings(state_dir=tmp_path, port=8877)
+    return Settings(state_dir=tmp_path, port=8877, admin_token_file=token)
 
 
 @pytest.mark.parametrize(

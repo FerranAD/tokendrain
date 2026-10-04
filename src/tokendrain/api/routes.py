@@ -3,18 +3,19 @@ import time
 from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import (
-    HTMLResponse,
+    FileResponse,
     JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
 )
 from sqlalchemy import delete, func, select, text
+from starlette.background import BackgroundTask
 
 from tokendrain import __version__
 from tokendrain.api.app import current, encoded
@@ -50,6 +51,7 @@ from tokendrain.domain import (
     ProjectPatch,
     RunTemplate,
     ScheduleInput,
+    TaskMutation,
     utcnow,
 )
 from tokendrain.events import event_json
@@ -114,8 +116,8 @@ async def logout() -> Response:
 
 
 @router.get(API + "/session")
-async def session_info() -> dict[str, bool]:
-    return {"authenticated": True}
+async def session_info(request: Request) -> dict[str, Any]:
+    return {"authenticated": True, "auth_mode": current(request).settings.auth_mode}
 
 
 @router.get(API + "/projects")
@@ -139,6 +141,56 @@ async def project(request: Request, project_id: str) -> Any:
 @router.patch(API + "/projects/{project_id}")
 async def update_project(request: Request, project_id: str, body: ProjectPatch) -> Any:
     return encoded(await current(request).projects.patch(project_id, body))
+
+
+@router.get(API + "/projects/{project_id}/workspace/archive")
+async def workspace_archive(request: Request, project_id: str) -> Response:
+    services = current(request)
+    ready(services)
+    await services.projects.require_idle(project_id)
+    async with services.storage.lease(project_id):
+        await services.projects.require_idle(project_id)
+        if services.settings.backend == "mock":
+            import tarfile
+
+            export_id = uuid4().hex
+            directory = services.settings.state_dir / "exports"
+            directory.mkdir(mode=0o700, exist_ok=True)
+            path = directory / (export_id + ".tar.gz")
+            with tarfile.open(path, "w:gz"):
+                pass
+        else:
+            from tokendrain.vm.firecracker import FirecrackerBackend
+
+            result = await FirecrackerBackend(services.settings.helper_socket)._request(
+                "workspace_export", {"project_id": project_id}
+            )
+            export_id = UUID(result["export_id"]).hex
+            path = services.settings.state_dir / "exports" / (export_id + ".tar.gz")
+    return FileResponse(
+        path,
+        media_type="application/gzip",
+        filename=f"tokendrain-{UUID(project_id).hex[:8]}-workspace.tar.gz",
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
+
+
+@router.get(API + "/projects/{project_id}/tasks")
+async def project_tasks(request: Request, project_id: str) -> Any:
+    return encoded(await current(request).projects.tasks(project_id))
+
+
+@router.post(API + "/projects/{project_id}/tasks")
+async def mutate_tasks(request: Request, project_id: str, body: list[TaskMutation]) -> Any:
+    if len(body) > 500:
+        raise ValueError("Too many task mutations")
+    return encoded(await current(request).projects.mutate_tasks(project_id, body))
+
+
+@router.delete(API + "/projects/{project_id}/tasks/{task_id}", status_code=204)
+async def delete_task(request: Request, project_id: str, task_id: str) -> Response:
+    await current(request).projects.delete_task(project_id, task_id)
+    return Response(status_code=204)
 
 
 @router.delete(API + "/projects/{project_id}", status_code=204)
@@ -406,6 +458,7 @@ async def models(request: Request) -> Any:
         {
             "id": value["id"],
             "name": value["display_name"],
+            "is_default": value["is_default"],
             "reasoning_efforts": value["supported_reasoning_efforts"],
         }
         for value in values
@@ -520,49 +573,20 @@ async def openai_status(request: Request) -> Any:
     services = current(request)
     accounts = [account for account in await services.auth.accounts() if account.connected]
     account = accounts[0] if accounts else None
+    credential_error = None
+    if account:
+        try:
+            await services.auth.runtime_credentials(account.id)
+        except (ValueError, OSError, TimeoutError, httpx.HTTPError):
+            credential_error = "Codex credentials could not be renewed. Replace auth.json."
     return {
         "connected": account is not None,
-        "method": ("chatgpt" if account.method == "siwc" else "import") if account else None,
+        "valid": account is not None and credential_error is None,
+        "credential_error": credential_error,
+        "method": "import" if account else None,
         "account_label": (account.email or account.subject) if account else None,
         "usage_error": (services.probe_cache or {}).get("usage_error"),
     }
-
-
-@router.post(API + "/auth/openai/login")
-async def openai_login(request: Request) -> Any:
-    services = current(request)
-    await no_active(services)
-    existing = next((a for a in await services.auth.accounts() if a.method == "siwc"), None)
-    result = await services.auth.begin_sign_in(
-        services.settings.openai_redirect_uri, existing.id if existing else None
-    )
-    return {"id": result.state, "url": result.url}
-
-
-@router.get("/auth/callback")
-@provider_change
-async def openai_callback(
-    request: Request,
-    state: str,
-    code: str = "",
-    client_id: str | None = None,
-    error: str | None = None,
-) -> Response:
-    services = current(request)
-    await no_active(services)
-    account = await services.auth.complete_sign_in(state, code, client_id, error)
-    # One selected account per host; disconnected records retain returning-client metadata.
-    for old in await services.auth.accounts():
-        if old.connected and old.id != account.id:
-            await services.auth.sign_out(old.id)
-    services.probe_cache = None
-    async with services.sessions.begin() as db:
-        await db.execute(delete(UsageSnapshot))
-    await services.events.publish("openai.connected")
-    return HTMLResponse(
-        "<html><body><h1>OpenAI connected</h1><p>You can close this tab and "
-        "return to tokendrain.</p><a href='/settings'>Open settings</a></body></html>"
-    )
 
 
 @router.post(API + "/auth/openai/import")

@@ -38,8 +38,6 @@ The default state directory is `/var/lib/tokendrain`:
 ```text
 tokendrain.sqlite3           Projects, runs, reports, events, settings
 credentials/                Versioned encrypted credential records
-admin-token                 Owner-level control-plane token, mode 0600
-host-id                     Stable OpenAI public-client host identifier
 daemon.lock                 Exclusive application-state ownership
 locks/<project-id>.lock     Cross-process project storage leases
 projects/<project-id>/
@@ -90,19 +88,19 @@ The supervisor owns execution tasks through structured concurrency. It enforces 
 2. Snapshot both offline disks. Snapshot preparation failure fails the execution before boot.
 3. Boot the immutable guest with persistent disks and bounded resources.
 4. Connect over vsock, inject runtime credentials, and start Codex app-server.
-5. Resume the saved thread when available or start one. Supply the goal, task log, feedback, previous state, integration capabilities, and secret names/descriptions.
+5. Resume the saved thread when available or start one. Supply the goal, Kanban board, feedback, previous state, integration capabilities, and secret names/descriptions.
 6. Read actual provider limits and request a substantial autonomous work unit. Save structured progress, then continue while the policy permits another turn.
 7. Stop Codex, clear managed runtime credentials, stop the guest, and confirm VMM exit before releasing the project.
 
-The agent inspects current files and processes before acting. Durable project state supplies context instead of continually replaying historical conversations. Feedback is cleared only after a turn returns a result, and only if its text still matches the instructions supplied to that session. A boot, authentication, or budget failure before any result leaves the feedback available for another run. Concurrently edited feedback is retained. Agent task-log updates compare against the last observed text so they do not overwrite a newer user edit.
+The agent inspects current files and processes before acting. Durable project state supplies context instead of continually replaying historical conversations. Feedback is cleared only after a turn returns a result, and only if its text still matches the instructions supplied to that session. A boot, authentication, or budget failure before any result leaves the feedback available for another run. Concurrently edited feedback is retained. Kanban mutations enforce human approval of Backlog in the host.
 
-Reports include summary, completed/remaining work, blockers, change counts and commits when available, next action, task log, and usage observations. Malformed model output becomes an incomplete report; it cannot prove completion. Earlier progress survives a subsequent provider or infrastructure failure.
+Reports include summary, completed/remaining work, blockers, change counts and commits when available, next action, structured task updates, and usage observations. Only final-answer items are parsed. Malformed final output fails visibly instead of starting another work turn. Earlier progress survives a subsequent provider or infrastructure failure.
 
 ## Budget boundaries
 
 Usage rules select a limit identifier and/or provider-reported window duration, then compare used percentage. Multiple rules use ANY semantics. Tokendrain assigns no fixed meaning to `primary` or `secondary` windows.
 
-Elapsed runtime is shared by the run, beginning when its first execution starts preparation. Preparation and earlier sequential executions consume that same allowance. It is evaluated before another turn, so an in-progress useful turn can finish after the threshold. A separate turn watchdog handles overlong turns; cancellation and expiring credentials have their own interruption paths.
+Elapsed runtime is shared by the run, beginning when its first execution starts preparation. Preparation and earlier sequential executions consume that same allowance. It is monitored during turns. Usage and runtime boundaries follow the persisted graceful/hard policy; graceful allows a single 90-second wrap-up, hard allows no finalization turn. A separate turn watchdog handles overlong turns; cancellation and expiring credentials have their own interruption paths.
 
 Account usage can change through other projects or external Codex sessions. Read responses and update notifications feed persisted observations. A percentage rule without an observable matching window fails visibly. Provider refusal and project completion are always natural boundaries. See [OpenAI authentication](openai-auth.md) for differences between account modes.
 

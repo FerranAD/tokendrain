@@ -101,7 +101,11 @@ def create_app(settings: Settings | None = None, overrides: Overrides | None = N
             public_callback = (
                 path == "/api/v1/integrations/github/setup" and request.method == "GET"
             )
-            if not public_callback and not (path == "/api/v1/session" and request.method == "POST"):
+            if (
+                settings.auth_mode == "token"
+                and not public_callback
+                and not (path == "/api/v1/session" and request.method == "POST")
+            ):
                 authorization = request.headers.get("authorization", "")
                 bearer = authorization[7:] if authorization.startswith("Bearer ") else ""
                 cookie = request.cookies.get("tokendrain_session", "")
@@ -120,7 +124,7 @@ def create_app(settings: Settings | None = None, overrides: Overrides | None = N
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
         )
-        if path.startswith("/api/") or path == "/auth/callback":
+        if path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
 

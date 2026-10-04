@@ -110,7 +110,8 @@ def test_report_schema_strict_and_malformed_output_never_completes() -> None:
     assert set(schema["required"]) == set(schema["properties"])
     assert not schema["additionalProperties"]
     assert "usage" not in schema["properties"]
-    assert parse_report("I might be done").status == "in_progress"
+    with pytest.raises(ValueError, match="checkpoint"):
+        parse_report("I might be done")
     assert parse_report('{"status":"completed","summary":"finished"}').status == "completed"
     safe = redact_value(
         {"summary": 'secret"quoted', "nested": ["token"]},

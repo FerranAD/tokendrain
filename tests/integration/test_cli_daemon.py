@@ -28,6 +28,10 @@ async def test_daemon_and_admin_client_stop_cleanly(tmp_path: Path) -> None:
         TOKENDRAIN_PORT=str(port),
         TOKENDRAIN_PUBLIC_URL=url,
     )
+    token_path = tmp_path / "admin-token"
+    token_path.write_text("t" * 48)
+    token_path.chmod(0o600)
+    environment["TOKENDRAIN_ADMIN_TOKEN_FILE"] = str(token_path)
     log_path = tmp_path / "daemon.log"
     with log_path.open("wb") as log:
         process = await asyncio.create_subprocess_exec(
@@ -45,7 +49,7 @@ async def test_daemon_and_admin_client_stop_cleanly(tmp_path: Path) -> None:
                         assert process.returncode is None, log_path.read_text()
                         try:
                             response = await client.get("/healthz?code=unlogged-authorization-code")
-                            if response.status_code == 200:
+                            if response.status_code == 200 and response.json().get("ready"):
                                 break
                         except httpx.TransportError:
                             pass

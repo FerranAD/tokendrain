@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, EventsProvider, mutate, useAction, useEvents, useResource } from './api';
+import { api, EventsProvider, mutate, useAction, useResource } from './api';
 import { NewProject, ProjectCards, ProjectPage, ProjectsPage } from './projects';
 import { PrepareRunPage, RunPage, RunsPage, RunTable, SchedulesPage } from './runs';
 import { SettingsPage } from './settings';
@@ -89,10 +89,7 @@ function App() {
 function Brand() {
   return (
     <span className="brand">
-      <svg aria-hidden="true" viewBox="0 0 32 32">
-        <rect width="32" height="32" rx="9" />
-        <path d="M9 10h14M16 7v18M11 20l5 5 5-5" />
-      </svg>
+      <img src="/branding/tokendrain-mascot-only.png" alt="" className="brand-logo" />
       <span>
         tokendrain<span className="brand-period">.</span>
       </span>
@@ -193,7 +190,7 @@ function NavIcon({ name }: { name: string }) {
 }
 
 function Shell({ path, onSignOut }: { path: string; onSignOut: () => void }) {
-  const { connected, refresh } = useEvents();
+  const session = useResource<{ auth_mode: string }>('/session');
   const action = useAction();
   const url = new URL(path, window.location.origin);
   const route = url.pathname;
@@ -232,11 +229,6 @@ function Shell({ path, onSignOut }: { path: string; onSignOut: () => void }) {
         <Link href="/" className="brand-link" aria-label="tokendrain dashboard">
           <Brand />
         </Link>
-        <div className="sidebar-caption">
-          PERSISTENT PROJECTS
-          <br />
-          AUTONOMOUS PROGRESS
-        </div>
         <nav aria-label="Main navigation">
           {navigation.map((item) => {
             const active = item.path === '/' ? route === '/' : route.startsWith(item.path);
@@ -254,35 +246,25 @@ function Shell({ path, onSignOut }: { path: string; onSignOut: () => void }) {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className="connection">
-            <span className={`status-dot ${connected ? 'online' : ''}`} />
-            {connected ? 'Live updates connected' : 'Reconnecting live updates'}
-          </div>
-          <button className="sidebar-button" onClick={refresh}>
-            Refresh data
-          </button>
-          <button
-            className="sidebar-button"
-            disabled={action.busy}
-            onClick={() => {
-              void action.run(async () => {
-                await mutate('/session', 'DELETE');
-                onSignOut();
-              });
-            }}
-          >
-            Sign out
-          </button>
+          {session.data?.auth_mode === 'token' && (
+            <button
+              className="sidebar-button"
+              disabled={action.busy}
+              onClick={() => {
+                void action.run(async () => {
+                  await mutate('/session', 'DELETE');
+                  onSignOut();
+                });
+              }}
+            >
+              Sign out
+            </button>
+          )}
           {action.error && <p className="tiny">{action.error}</p>}
-          <span className="sidebar-footnote">Self-hosted. Always your work.</span>
         </div>
       </aside>
       <main id="main" tabIndex={-1}>
         {content}
-        <footer className="page-footer">
-          <span>tokendrain</span>
-          <span>Projects persist. Agents are disposable.</span>
-        </footer>
       </main>
     </div>
   );
@@ -297,20 +279,32 @@ function Dashboard() {
   const [creating, setCreating] = useState(false);
   const active =
     runs.data?.filter(
-      (run) => !['completed', 'failed', 'cancelled', 'blocked'].includes(run.status),
+      (run) => !['completed', 'failed', 'cancelled', 'blocked', 'stopped'].includes(run.status),
     ).length ?? 0;
   return (
     <>
       <PageTitle
-        eyebrow="Make room for progress"
-        title="Your work, moving forward."
-        description="Give persistent projects your available Codex capacity."
+        title="Usage & runs"
         actions={
           <Link className="button primary" href="/prepare">
             ▶ Prepare run
           </Link>
         }
       />
+      <section className="dashboard-section">
+        <div className="section-heading">
+          <h2>Provider allowance</h2>
+          <Link className="text-link" href="/settings">
+            Manage connection ↗
+          </Link>
+        </div>
+        <ErrorNotice error={usage.error} />
+        <UsageCards windows={usage.data ?? []} />
+        <p className="tiny muted">
+          Reported by Codex. Windows use provider metadata; usage may be shared with your other
+          Codex sessions.
+        </p>
+      </section>
       <div className="dashboard-stats">
         <div>
           <span className="muted small">Projects</span>
@@ -333,20 +327,19 @@ function Dashboard() {
           </strong>
         </div>
       </div>
-      <section className="dashboard-section">
-        <div className="section-heading">
-          <h2>Observed usage</h2>
-          <Link className="text-link" href="/settings">
-            Manage connection ↗
-          </Link>
-        </div>
-        <ErrorNotice error={usage.error} />
-        <UsageCards windows={usage.data ?? []} />
-        <p className="tiny muted">
-          Reported by Codex. Windows use provider metadata; usage may be shared with your other
-          Codex sessions.
-        </p>
-      </section>
+      {active > 0 && (
+        <section className="panel">
+          <h2>Active Runs</h2>
+          <RunTable
+            runs={
+              runs.data?.filter(
+                (r) =>
+                  !['completed', 'failed', 'cancelled', 'blocked', 'stopped'].includes(r.status),
+              ) || []
+            }
+          />
+        </section>
+      )}
       <section className="dashboard-section">
         <div className="section-heading">
           <h2>

@@ -49,7 +49,13 @@ def parser() -> argparse.ArgumentParser:
 
 
 def token_path(settings: Settings, supplied: Path | None) -> Path:
-    return supplied or settings.admin_token_file or settings.state_dir / "admin-token"
+    if supplied:
+        return supplied
+    if settings.admin_token_file:
+        return settings.admin_token_file
+    if settings.auth_mode == "none":
+        return settings.state_dir / "unused-token"
+    raise ValueError("Configure TOKENDRAIN_ADMIN_TOKEN_FILE or use --token-file")
 
 
 def read_token(path: Path) -> str:
@@ -99,7 +105,9 @@ async def execute(
     if arguments.command == "doctor":
         checks = await asyncio.to_thread(inspect_checks, settings)
         try:
-            token = await asyncio.to_thread(read_token, path)
+            token = (
+                await asyncio.to_thread(read_token, path) if settings.auth_mode == "token" else ""
+            )
             status = await fetch(client, url, token, "system")
             checks.append(
                 DoctorCheck(
@@ -130,7 +138,7 @@ async def execute(
                 label = check.name if check.scope == "host" else f"{check.scope}.{check.name}"
                 print(f"{'OK  ' if check.ok else 'FAIL'} {label}: {check.message}", file=output)
         return 0 if all(check.ok for check in checks) else 1
-    token = await asyncio.to_thread(read_token, path)
+    token = await asyncio.to_thread(read_token, path) if settings.auth_mode == "token" else ""
     resource = "system" if arguments.command == "status" else arguments.command
     data = await fetch(client, url, token, resource)
     if arguments.json or not isinstance(data, list):

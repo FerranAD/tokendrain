@@ -25,6 +25,46 @@ def event_json(row: Event) -> dict[str, Any]:
     }
 
 
+def activity(message: str) -> tuple[str, str, dict[str, Any]]:
+    """Normalize completed protocol items while preserving their full redacted payload."""
+    try:
+        raw = json.loads(message)
+    except (ValueError, TypeError):
+        return "execution.activity", message, {}
+    if not isinstance(raw, dict):
+        return "execution.activity", message, {"raw": raw}
+    kind = raw.get("type")
+    data: dict[str, Any] = {"raw": raw}
+    if kind == "error":
+        error = raw.get("error")
+        detail = error.get("message") if isinstance(error, dict) else error
+        return "execution.error", str(raw.get("message") or detail or "Codex error"), data
+    if kind == "userMessage":
+        return "execution.debug", "Internal orchestration prompt", data
+    if kind == "agentMessage":
+        text = str(raw.get("text", ""))
+        if raw.get("phase") in (None, "final_answer"):
+            from tokendrain.orchestration.driver import parse_report
+
+            try:
+                report = parse_report(text)
+            except ValueError:
+                if raw.get("phase") is None:
+                    return "agent.progress", text, data
+                return "execution.error", "Agent returned an invalid checkpoint", data
+            data["report"] = report.model_dump(mode="json")
+            return "agent.checkpoint", report.summary, data
+        return "agent.progress", text, data
+    if kind == "commandExecution":
+        for key in ("command", "cwd", "status", "exitCode", "durationMs", "aggregatedOutput"):
+            data[key] = raw.get(key)
+        return "command", str(raw.get("command", "Command")), data
+    if kind == "fileChange":
+        data["changes"] = raw.get("changes", [])
+        return "files.changed", "Files changed", data
+    return "execution.debug", str(kind or "Protocol event"), data
+
+
 class EventBus:
     """Persist before wakeup; SSE clients replay after disconnect using database IDs."""
 
@@ -42,6 +82,8 @@ class EventBus:
         execution_id: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
+        if type == "execution.log":
+            type, message, data = activity(message)
         async with self.sessions.begin() as db:
             db.add(
                 Event(

@@ -4,14 +4,14 @@ All paths are under `/api/v1`. JSON responses use bare arrays for lists and obje
 
 Authentication: `POST /session {token}` establishes a same-origin HttpOnly cookie; `DELETE /session` signs out. An unauthenticated request returns 401. All fetch and SSE requests use same-origin credentials. POST/PATCH/DELETE requests are JSON and send `X-Tokendrain-Request: 1` as a CSRF defense in addition to server Origin validation.
 
-`GET /events` is SSE. Default-message data is JSON with a `type`, optional `project_id`, `run_id`, `execution_id`, `message`, `timestamp`. Any message invalidates displayed API data (coalesced); `execution.log` messages also append to the live run log. Server must replay events with Last-Event-ID if supported. UI shows connection status and manually refreshes on reconnect.
+`GET /events` is SSE. Default-message data is JSON with a `type`, optional `project_id`, `run_id`, `execution_id`, `message`, `timestamp`. Any message invalidates displayed API data (coalesced); `execution.log` messages also append to the live run log. Server must replay events with Last-Event-ID if supported. UI reloads automatically on reconnect; connection status appears in Run activity.
 
 ## Projects
 
 - `GET /projects` → `Project[]`
-- `POST /projects {name,description,default_model?,default_reasoning_effort?}`
+- `POST /projects {name,description,default_model?,default_reasoning_effort?,initial_tasks?:[{title,description,column}]}`
 - `GET /projects/{id}` → `Project`
-- `PATCH /projects/{id}` accepts `name,description,task_log,next_run_feedback,default_model,default_reasoning_effort`
+- `PATCH /projects/{id}` accepts `name,description,next_run_feedback,default_model,default_reasoning_effort`
 - `DELETE /projects/{id}` rejects active projects
 - `GET /projects/{id}/executions` → `Execution[]`
 - `GET /projects/{id}/storage` → `{environment:{size_bytes,used_bytes,path?},workspace:{size_bytes,used_bytes,path?}}`
@@ -22,7 +22,7 @@ Authentication: `POST /session {token}` establishes a same-origin HttpOnly cooki
 - `POST /projects/{id}/environment/reset {}`
 - `POST /projects/{id}/storage/resize {scope:"workspace"|"environment",size_gib:number}`
 
-Project: `{id,name,description,task_log,next_run_feedback,status,default_model,default_reasoning_effort,created_at,updated_at,last_run_at?,latest_report?:Report,environment_metadata?,workspace_metadata?}`. Empty model means provider default. Snapshot: `{id,name,created_at,environment_bytes?,workspace_bytes?}`.
+Project: `{id,name,description,next_run_feedback,status,default_model,default_reasoning_effort,created_at,updated_at,last_run_at?,latest_report?:Report,environment_metadata?,workspace_metadata?}`. Empty model means provider default. Snapshot: `{id,name,run_id:null|string,created_at,environment_bytes?,workspace_bytes?}`.
 
 ## Runs, limits, models
 
@@ -34,13 +34,13 @@ Project: `{id,name,description,task_log,next_run_feedback,status,default_model,d
 - `GET /usage` → `UsageWindow[]`
 - `GET /auth/openai/models` → `Model[]`
 
-RunTemplate: `{projects:[{project_id,model,reasoning_effort}],stop_conditions:[{kind:"usage",window_minutes:number,used_percent:number,limit_id?:string}|{kind:"elapsed",seconds:number}|{kind:"provider_limit"}|{kind:"project_completed"}],parallel:boolean}`. Stop conditions use ANY semantics. Runtime and usage limits are optional; provider limit and completion are natural stopping conditions.
+RunTemplate: `{projects:[{project_id,model,reasoning_effort}],stop_conditions:[{kind:"usage",window_minutes:number,used_percent:number,limit_id?:string}|{kind:"elapsed",seconds:number}|{kind:"provider_limit"}|{kind:"project_completed"}],parallel:boolean,threshold_mode:"graceful"|"hard"}`. Stop conditions use ANY semantics. Runtime and usage limits are optional; provider limit and completion are natural stopping conditions.
 
-Run: `{id,status,created_at,started_at?,finished_at?,parallel,stop_conditions,executions:Execution[]}`.
-Execution: `{id,project_id,project_name?,run_id,status,model,reasoning_effort,started_at?,finished_at?,error?,report?:Report,thread_id?}`.
+Run: `{id,status,created_at,started_at?,finished_at?,parallel,stop_conditions,threshold_mode,executions:Execution[]}`.
+Execution: `{id,project_id,project_name?,run_id,status,model,reasoning_effort,started_at?,finished_at?,error?,termination_reason?,termination_detail?,threshold_mode?,interrupted,report?:Report,checkpoint_from_execution_id?,thread_id?}`. Execution outcome is separate from the last valid agent report.
 UsageWindow: `{limit_id,name?,used_percent,window_minutes?,resets_at?,observed_at?}`. Names/window durations come from provider; UI never assumes primary or secondary semantics.
 Model: `{id,name?,reasoning_efforts?:string[],is_default?:boolean}`. If model discovery is unavailable, UI permits entering a model manually.
-Report: `{status,summary,completed:string[],remaining:string[],blockers:string[],changes?:{files_changed:number,insertions:number,deletions:number,commits?:string[]},suggested_next_action?,task_log?,usage?:{start:UsageWindow[],end:UsageWindow[]}}`.
+Report: `{status,summary,completed:string[],remaining:string[],blockers:string[],changes?:{files_changed:number,insertions:number,deletions:number,commits?:string[]},suggested_next_action?,task_updates?:[{id,title,description,column,position}],usage?:{start:UsageWindow[],end:UsageWindow[]}}`.
 Event: `{id?,type,message?,timestamp?,execution_id?,run_id?,project_id?,data?}`.
 
 ## Schedules
@@ -54,8 +54,7 @@ Schedule: `{id,name,cron,timezone,enabled,run_template,next_run_at?,last_run_at?
 
 ## OpenAI / system
 
-- `GET /auth/openai` → `{connected,method?:"chatgpt"|"import",account_label?,login?:{id,url,status,error?}}`
-- `POST /auth/openai/login {}` → `{id,url}` (host Codex supported login flow)
+- `GET /auth/openai` → `{connected,valid,credential_error?,method?:"import",account_label?}`
 - `POST /auth/openai/import {auth_json:object}`
 - `DELETE /auth/openai`
 - `GET /system` → `{version,backend,concurrency,vm_defaults:{vcpus,memory_mib,disk_gib},checks:[{name,ok,message,scope}],uptime_seconds?,active_executions?}`
@@ -84,3 +83,14 @@ Installation: `{id,account,permissions?:Record<string,string>}`. Repository: `{i
 - `POST /projects/{id}/secrets/import {dotenv,descriptions:Record<string,string>}` (UI asks for per-variable descriptions before submission; malformed dotenv is rejected by server)
 
 Secret: `{name,description,updated_at?}`.
+
+## Kanban and workspace
+
+- `GET /projects/{id}/tasks` → tasks with stable `id`, `title`, `description`, `column`, `position`, `origin` (`user`/`agent`).
+- `POST /projects/{id}/tasks` accepts a list of `{id?,title?,description?,column?,position?}` mutations and returns the board. No ID creates a user task; supplied IDs must belong to this project.
+- `DELETE /projects/{id}/tasks/{task_id}`.
+- `GET /projects/{id}/workspace/archive` downloads `.tar.gz`; rejects active projects. Symlinks and special files are excluded.
+
+Execution outcomes include `termination_reason`, `termination_detail`, `threshold_mode`, and `interrupted`. `report` contains the latest valid checkpoint, with `checkpoint_from_execution_id` identifying its source if retained from an older execution. Execution status `stopped` covers budget/provider/no-progress stops. Run thresholds do not fabricate completion reports.
+
+In auth-none mode `GET /session` includes `auth_mode:"none"`; login and cookies are unnecessary. Mutation request-header and Origin checks remain mandatory.

@@ -1,8 +1,10 @@
 # tokendrain
 
-**Persistent projects. Disposable agents. Useful work from your available Codex usage.**
+<img src="web/public/branding/tokendrain-logo-horizontal.png" alt="tokendrain" width="520" />
 
-Tokendrain is a self-hosted NixOS service that runs Codex autonomously inside Firecracker microVMs. Give a project a goal, choose a model and stopping conditions, and let it work. Its source tree, installed tools, task log, and reports remain available for the next run.
+**Put your Codex allowance to work before it resets.**
+
+Tokendrain is a self-hosted NixOS service that runs Codex autonomously inside Firecracker microVMs. Give a project a goal, choose a model and stopping conditions, and let it work. Its source tree, installed tools, Kanban board, and checkpoints remain available for the next run.
 
 Agents have root access inside their VMs and execute commands without approval prompts. The VM, host firewall, and scoped runtime credentials define the boundary. Read the [security model](docs/security.md) before supplying credentials.
 
@@ -10,9 +12,9 @@ Agents have root access inside their VMs and execute commands without approval p
 
 - Keeps separate persistent **environment** and **workspace** disks for every project.
 - Runs several projects with per-project model/reasoning settings and bounded concurrency.
-- Stops at useful turn boundaries on observed usage thresholds, runtime budgets, provider limits, completion, or blockers.
+- Supports graceful wrap-up or immediate interruption on observed usage thresholds, plus runtime budgets and natural completion/blocker boundaries.
 - Creates ordinary runs from timezone-aware cron schedules.
-- Connects through Sign in with ChatGPT or an advanced Codex `auth.json` import, with host-owned refresh and runtime token rotation.
+- Connects through imported Codex `auth.json`, with host-owned refresh and runtime token rotation.
 - Supplies narrowly scoped GitHub App installation tokens and optional described `.env` secrets.
 - Provides a React UI for projects, tasks, feedback, reports, live events, schedules, snapshots, and account settings.
 - Reconciles surviving VMs and interrupted executions after daemon restarts.
@@ -46,6 +48,10 @@ Add the input and module to your system flake, keeping your existing host and ha
             web = {
               listenAddress = "127.0.0.1";
               port = 8742;
+            };
+            auth = {
+              mode = "token";
+              adminTokenFile = "/run/secrets/tokendrain-admin";
             };
             concurrency = 2;
             microvm = {
@@ -88,12 +94,12 @@ ssh -N -L 8742:127.0.0.1:8742 your-nixos-host
 Open that local URL in your browser. Retrieve the administration token on the host:
 
 ```sh
-sudo cat /var/lib/tokendrain/admin-token
+sudo cat /run/secrets/tokendrain-admin
 ```
 
-Paste it into the login form. This token controls the whole application; keep it private. The browser receives an HttpOnly session cookie and does not save the token in browser storage. The daemon creates the token on first startup.
+Paste it into the login form. This token controls the whole application; keep it private. The browser receives an HttpOnly session cookie and does not save the token in browser storage. Supply a token of at least 32 characters through `auth.adminTokenFile`. Tokendrain never generates it. Runtime secret paths work with agenix and sops-nix. Token mode without a file fails configuration/startup.
 
-For remote HTTPS access, configure a reverse proxy and `services.tokendrain.web.publicUrl` to the browser-facing URL. Keep the daemon's listener private. OpenAI's public-client sign-in still needs the loopback callback described in [OpenAI authentication](docs/openai-auth.md).
+For remote HTTPS access, configure a reverse proxy and `services.tokendrain.web.publicUrl` to the browser-facing URL. Keep the daemon's listener private. For VPN, reverse-proxy authentication, or a trusted private network, set `services.tokendrain.auth.mode = "none"`. This hides login/sign-out and removes session requirements; Host/Origin/request-header checks still apply.
 
 ### Encryption key
 
@@ -109,16 +115,20 @@ Supply a raw 32-byte key or its URL-safe base64 encoding. Use a runtime **string
 
 ## First project
 
-1. Open **Settings → OpenAI / Codex** and select **Sign in with ChatGPT**. Complete the browser flow. Importing an existing Codex `auth.json` is an alternative compatibility path.
-2. Create a project and describe the goal, constraints, and how success should be checked.
+1. Open **Settings → OpenAI / Codex → Import Codex auth.json**. Upload/paste your Codex login file. Refresh stays managed by Codex on the host, so imported credentials work beyond their initial token expiry.
+2. Create a project with a title, description, and initial tasks. Choose Todo for approved work or Backlog for later review.
 3. Optionally attach a repository through your [GitHub App](docs/github-app.md) and add project secrets with explanations of their permitted use.
 4. Select **Prepare run**. Choose projects, models, reasoning effort, and stopping conditions. Start the run or save it as a schedule.
-5. Watch execution events and read the structured report. Edit the shared task log or leave feedback for the next run.
+5. Follow the activity timeline and checkpoints. Move/edit Kanban cards or leave feedback for the next run.
 6. Run again: `/workspace`, the persistent home, Nix profiles, installed tools, and caches are reused in a fresh VM.
 
-Usage windows come from actual provider metadata. They are not assumed to mean a particular five-hour or weekly allowance. Sign in with ChatGPT's custom provider may not expose percentage windows; use runtime or provider exhaustion when observations are unavailable. A percentage rule without matching observations fails visibly rather than silently running without that budget. [Authentication and usage details](docs/openai-auth.md) explains the two account modes.
+Usage windows come from provider metadata. A percentage rule without matching observations fails visibly rather than silently running without a budget.
 
-Runtime and percentage budgets are checked between turns and are soft work boundaries. Cancellation, credential expiry handling, and the separate turn watchdog can interrupt an active turn. A run marked `completed` means its execution window ended normally; the report separately says whether the project's goal is complete.
+**Graceful stop** is the default: reaching a threshold stops normal work, interrupts an active turn, and allows one wrap-up/checkpoint turn for up to 90 seconds. It may use some extra allowance. **Hard limit** interrupts when the threshold is observed and starts no further model work. Observations can arrive late, so hard mode is not exact quota enforcement. Both modes stop the execution with a usage termination reason; neither means the project is complete. An uncooperative interrupt gets a short bounded wait before infrastructure shutdown.
+
+The Kanban columns are Backlog, Todo, In progress, and Done. Agents resume In progress first, then Todo. They can edit tasks and add discoveries to Backlog, but the host forbids agents from moving Backlog into approved work. Only users promote Backlog. No approved tasks means the agent should finish. Old Markdown task logs are discarded rather than migrated.
+
+Execution outcomes (completion, blockers, cancellation, limits, infrastructure errors) are separate from the last valid agent checkpoint. Commentary never enters report parsing. Repeated unchanged checkpoints stop automatically.
 
 Next-run feedback remains pending until an execution returns a turn result. Failed boot or authentication does not consume it. New feedback entered while work is running is retained for a later run.
 
@@ -141,7 +151,7 @@ Before reconnecting/importing/disconnecting OpenAI, replacing the GitHub App key
 
 Execution defaults saved in Settings survive daemon restarts and take precedence over NixOS initial defaults. NixOS concurrency, CPU, and memory maxima still apply. Increasing the default disk size affects newly created projects; use a project's Environment controls to grow an existing disk.
 
-Each project's **Environment** tab provides snapshots, selective restore, environment reset, and offline disk growth. Snapshots are disk copies, not RAM snapshots.
+Each project's **Environment** tab provides snapshots, selective restore, environment reset, and offline disk growth. Automatic snapshots link to their Run. **Workspace** downloads the current files as `.tar.gz` while the project is idle. The privileged helper reads the selected disk in a read-only private mount namespace; symlinks and special files are omitted. Snapshots are disk copies, not RAM snapshots.
 
 After an unexpected restart, surviving VMs are stopped before project reservations are released. Interrupted active executions become failed with an explanation; queued work can resume. A new run inspects and continues preserved work without blindly replaying a side-effecting turn.
 
@@ -160,7 +170,7 @@ npm ci
 npm run build
 ```
 
-Test backends exercise orchestration without OpenAI credentials or KVM. Separate tests boot real Firecracker guests, verify persistent workspace/environment state, and exercise the helper and network isolation inside disposable NixOS machines. Browser tests cover UI/API interactions and mobile layout. Live provider sign-in, actual inference/account entitlements, multi-hour provider token rotation, and GitHub repository writes have not been exercised with real accounts; the [development guide](docs/development.md#live-account-acceptance) lists those remaining acceptance checks.
+Test backends exercise orchestration without OpenAI credentials or KVM. Separate tests boot real Firecracker guests, verify persistent workspace/environment state, and exercise the helper and network isolation inside disposable NixOS machines. Browser tests cover UI/API interactions and mobile layout. Actual inference/account entitlements, multi-hour provider token rotation, and GitHub repository writes have not been exercised with real accounts; the [development guide](docs/development.md#live-account-acceptance) lists those remaining acceptance checks.
 
 See [development instructions](docs/development.md) for the mock daemon, browser checks, real KVM tests, and NixOS tests.
 

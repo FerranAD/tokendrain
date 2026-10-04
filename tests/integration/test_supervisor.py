@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from tokendrain.domain import (
     ProjectPatch,
     RunReport,
     RunTemplate,
+    TaskMutation,
     UsageStop,
     UsageWindow,
     utcnow,
@@ -46,9 +48,7 @@ class ScriptSession:
         self.redactor = SecretRedactor()
         self.prompts: list[str] = []
         self.windows: list[list[UsageWindow]] = [[]]
-        self.reports = [
-            RunReport(status="completed", summary="Implemented and verified", task_log="done")
-        ]
+        self.reports = [RunReport(status="completed", summary="Implemented and verified")]
         self.closed = False
         self.started = asyncio.Event()
         self.action: Callable[[], Awaitable[None]] | None = None
@@ -177,14 +177,15 @@ async def test_run_stops_at_completed_turn_budget_boundary(harness: Harness) -> 
         [UsageWindow(limit_id="actual", window_minutes=300, used_percent=95)],
     ]
     harness.session.reports = [
-        RunReport(summary="Useful work done", task_log="verified first unit")
+        RunReport(summary="Useful work done"),
+        RunReport(summary="Saved checkpoint at budget boundary", status="in_progress"),
     ]
     await harness.supervisor.execute(execution, asyncio.Event())
     state = await harness.runs.get(run)
-    assert state["status"] == "completed"
-    assert len(harness.session.prompts) == 1
+    assert state["status"] == "stopped"
+    assert len(harness.session.prompts) == 2
     assert harness.session.closed and not harness.vm.handles
-    assert (await harness.projects.get(project))["task_log"] == "verified first unit"
+    assert state["executions"][0]["termination_reason"] == "usage_threshold"
     assert state["executions"][0]["report"]["usage"]["end"][0]["used_percent"] == 95
     assert len(await harness.storage.list_snapshots(project)) == 1
 
@@ -201,18 +202,6 @@ async def test_unobservable_usage_fails_closed_and_preserves_feedback(harness: H
     assert harness.session.closed and not harness.vm.handles
 
 
-async def test_concurrent_user_task_edits_win_over_agent_report(harness: Harness) -> None:
-    project, run, execution = await harness.run()
-
-    async def edit() -> None:
-        await harness.projects.patch(project, ProjectPatch(task_log="User changed tasks"))
-
-    harness.session.action = edit
-    await harness.supervisor.execute(execution, asyncio.Event())
-    assert (await harness.projects.get(project))["task_log"] == "User changed tasks"
-    assert (await harness.runs.get(run))["status"] == "completed"
-
-
 async def test_infrastructure_failure_is_not_completion(harness: Harness) -> None:
     project, run, execution = await harness.run()
 
@@ -223,7 +212,7 @@ async def test_infrastructure_failure_is_not_completion(harness: Harness) -> Non
     await harness.supervisor.execute(execution, asyncio.Event())
     state = await harness.runs.get(run)
     assert state["status"] == "failed"
-    assert state["executions"][0]["report"]["status"] == "failed"
+    assert state["executions"][0]["termination_reason"] == "infrastructure_error"
     assert (await harness.projects.get(project))["thread_id"] == "durable-thread"
     assert harness.session.closed and not harness.vm.handles
 
@@ -257,7 +246,7 @@ async def test_unconfirmed_teardown_keeps_reservation_until_reconcile(harness: H
     assert not harness.vm.handles
     state = await harness.runs.get(run)
     assert state["status"] == "failed"
-    assert state["executions"][0]["report"]["status"] == "failed"
+    assert state["executions"][0]["termination_reason"] == "infrastructure_error"
 
 
 async def test_partial_vm_start_is_reconciled(harness: Harness) -> None:
@@ -277,8 +266,8 @@ async def test_runwide_elapsed_limit_stops_before_next_vm_boot(harness: Harness)
     await harness.supervisor.execute(execution, asyncio.Event())
     assert harness.vm.starts == 0
     state = await harness.runs.get(run)
-    assert state["status"] == "completed"
-    assert "Runtime reached" in state["executions"][0]["report"]["summary"]
+    assert state["status"] == "stopped"
+    assert "Runtime reached" in state["executions"][0]["termination_detail"]
 
 
 async def test_snapshot_failure_never_starts_vm(harness: Harness) -> None:
@@ -447,3 +436,113 @@ async def test_guest_shutdown_failure_is_failed_even_if_vm_teardown_succeeds(
     result = await harness.runs.get(run)
     assert result["status"] == "failed"
     assert "shutdown failed" in result["executions"][0]["error"]
+
+
+async def test_hard_limit_interrupts_active_work_without_finalization(harness: Harness) -> None:
+    _, run_id, execution_id = await harness.run([UsageStop(window_minutes=300, used_percent=70)])
+    async with harness.sessions.begin() as db:
+        run = await db.get(Run, run_id)
+        assert run
+        run.threshold_mode = "hard"
+    harness.session.windows = [[UsageWindow(limit_id="codex", window_minutes=300, used_percent=69)]]
+    harness.session.wait_until_cancel = True
+    work = asyncio.create_task(harness.supervisor.execute(execution_id, asyncio.Event()))
+    await asyncio.wait_for(harness.session.started.wait(), 3)
+    assert harness.session.observe
+    await harness.session.observe(
+        [UsageWindow(limit_id="codex", window_minutes=300, used_percent=71)]
+    )
+    await asyncio.wait_for(work, 3)
+    execution = (await harness.runs.get(run_id))["executions"][0]
+    assert len(harness.session.prompts) == 1
+    assert execution["status"] == "stopped"
+    assert execution["termination_reason"] == "usage_threshold"
+    assert execution["threshold_mode"] == "hard" and execution["interrupted"]
+    assert execution["report"] is None
+    assert not harness.vm.handles and harness.session.closed
+
+
+async def test_graceful_limit_wraps_up_once_and_retains_checkpoint(harness: Harness) -> None:
+    project_id, run_id, execution_id = await harness.run(
+        [UsageStop(window_minutes=300, used_percent=70)]
+    )
+    tasks = await harness.projects.mutate_tasks(
+        project_id, [TaskMutation(title="Approved work", column="todo")]
+    )
+    harness.session.windows = [[UsageWindow(limit_id="codex", window_minutes=300, used_percent=69)]]
+
+    async def reach_limit() -> None:
+        assert harness.session.observe
+        await harness.session.observe(
+            [UsageWindow(limit_id="codex", window_minutes=300, used_percent=71)]
+        )
+        harness.session.action = None
+
+    harness.session.action = reach_limit
+    harness.session.reports = [
+        RunReport(summary="Current unit"),
+        RunReport(status="completed", summary="Workspace settled"),
+    ]
+    await harness.supervisor.execute(execution_id, asyncio.Event())
+    execution = (await harness.runs.get(run_id))["executions"][0]
+    assert len(harness.session.prompts) == 2
+    assert "Stop new substantive work" in harness.session.prompts[1]
+    board = json.loads(harness.session.prompts[1].split("\n", 1)[1])["kanban"]
+    assert board[0]["id"] == tasks[0]["id"]
+    assert isinstance(board[0]["created_at"], str)
+    assert execution["status"] == "stopped"  # Model completion cannot override the usage outcome.
+    assert execution["termination_reason"] == "usage_threshold"
+    assert execution["report"]["summary"] == "Workspace settled"
+    assert not execution["interrupted"]
+
+
+async def test_kanban_timestamps_are_serializable_in_initial_and_continuation_prompts(
+    harness: Harness,
+) -> None:
+    project_id, run_id, execution_id = await harness.run()
+    tasks = await harness.projects.mutate_tasks(
+        project_id, [TaskMutation(title="Approved work", column="todo")]
+    )
+    harness.session.reports = [
+        RunReport(status="in_progress", summary="Work started"),
+        RunReport(status="completed", summary="Work finished"),
+    ]
+    await harness.supervisor.execute(execution_id, asyncio.Event())
+    assert (await harness.runs.get(run_id))["status"] == "completed"
+    assert len(harness.session.prompts) == 2
+    for prompt in harness.session.prompts:
+        context = json.loads(prompt.split("\n", 1)[1])
+        task = context["kanban"][0]
+        assert task["id"] == tasks[0]["id"]
+        assert task["title"] == "Approved work"
+        assert isinstance(task["created_at"], str)
+        assert isinstance(task["updated_at"], str)
+
+
+async def test_repeated_checkpoints_stop_no_progress_loop(harness: Harness) -> None:
+    _, run, execution = await harness.run()
+    harness.session.reports = [RunReport(summary="Same state") for _ in range(4)]
+    await harness.supervisor.execute(execution, asyncio.Event())
+    result = (await harness.runs.get(run))["executions"][0]
+    assert result["status"] == "stopped" and result["termination_reason"] == "no_progress"
+    assert len(harness.session.prompts) == 3
+    assert result["report"]["status"] == "in_progress"
+
+
+async def test_cancellation_preserves_previous_valid_checkpoint(harness: Harness) -> None:
+    project, run, execution = await harness.run()
+    await harness.supervisor.execute(execution, asyncio.Event())
+    checkpoint = (await harness.runs.get(run))["executions"][0]["report"]
+    next_run = await harness.runs.create(RunTemplate(projects=[ProjectConfig(project_id=project)]))
+    harness.session.started.clear()
+    harness.session.wait_until_cancel = True
+    cancel = asyncio.Event()
+    task = asyncio.create_task(harness.supervisor.execute(next_run["executions"][0]["id"], cancel))
+    await asyncio.wait_for(harness.session.started.wait(), 3)
+    cancel.set()
+    await asyncio.wait_for(task, 3)
+    result = (await harness.runs.get(next_run["id"]))["executions"][0]
+    assert result["report"] == checkpoint
+    assert result["termination_reason"] == "user_cancelled"
+    assert result["checkpoint_from_execution_id"] == execution
+    assert "Cancelled by user" not in result["report"]["blockers"]

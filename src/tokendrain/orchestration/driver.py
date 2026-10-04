@@ -81,6 +81,10 @@ class SessionFactory(Protocol):
     ) -> WorkSession: ...
 
 
+class ResumeRequired(Exception):
+    """A transport/credential interruption is orchestration state, not an agent checkpoint."""
+
+
 def is_provider_limit(value: object) -> bool:
     raw = json.dumps(value, default=str).lower()
     return any(
@@ -101,13 +105,8 @@ def parse_report(text: str) -> RunReport:
         cleaned = cleaned.partition("\n")[2].rsplit("```", 1)[0]
     try:
         return RunReport.model_validate_json(cleaned)
-    except (ValueError, ValidationError):
-        # Preserve work and report uncertainty; malformed output is never completion.
-        return RunReport(
-            summary=cleaned[:100_000] or "Turn ended without a structured report.",
-            remaining=["Inspect the workspace and update the structured report."],
-            suggested_next_action="Inspect current state before continuing.",
-        )
+    except (ValueError, ValidationError) as error:
+        raise ValueError("Codex final answer was not a valid structured checkpoint") from error
 
 
 def report_output_schema() -> dict[str, Any]:
@@ -135,7 +134,24 @@ def report_output_schema() -> dict[str, Any]:
         "blockers": text_array,
         "changes": changes,
         "suggested_next_action": {"type": "string"},
-        "task_log": {"type": "string"},
+        "task_updates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": ["string", "null"]},
+                    "title": {"type": ["string", "null"]},
+                    "description": {"type": ["string", "null"]},
+                    "column": {
+                        "type": ["string", "null"],
+                        "enum": ["backlog", "todo", "in_progress", "done", None],
+                    },
+                    "position": {"type": ["integer", "null"]},
+                },
+                "required": ["id", "title", "description", "column", "position"],
+            },
+        },
     }
     return {
         "type": "object",
@@ -362,7 +378,8 @@ class RealSession:
         except (ConnectionError, OSError):
             if cancel.is_set():
                 raise asyncio.CancelledError from None
-            return await self.recover(model)
+            recovered = await self.recover(model)
+            raise ResumeRequired(recovered.summary) from None
 
     async def _turn(self, prompt: str, model: str, effort: str, cancel: asyncio.Event) -> RunReport:
         if cancel.is_set():
@@ -375,6 +392,8 @@ class RealSession:
             gh if gh != self.github else None,
             model,
         )
+        if cancel.is_set():
+            raise asyncio.CancelledError
         try:
             turn_id = await self.codex.start_turn(
                 self.thread_id, prompt, model or None, effort, report_output_schema()
@@ -383,8 +402,7 @@ class RealSession:
             if is_provider_limit(error.data) or is_provider_limit(str(error)):
                 raise ProviderLimited("Provider usage limit prevents further work") from error
             raise
-        text_parts: list[str] = []
-        completed_text: list[str] = []
+        final_text: str | None = None
         received_text = 0
         pending_runtime: RuntimeCredentials | None = None
         pending_github: InstallationToken | None = None
@@ -406,9 +424,10 @@ class RealSession:
                 if (
                     cancel.is_set() or pending_runtime or pending_github
                 ) and interrupted_at is None:
-                    await self.codex.interrupt(self.thread_id, turn_id)
+                    async with asyncio.timeout(5):
+                        await self.codex.interrupt(self.thread_id, turn_id)
                     interrupted_at = now
-                if interrupted_at and now - interrupted_at > 60:
+                if interrupted_at and now - interrupted_at > 10:
                     raise TimeoutError(
                         "Codex did not acknowledge interrupt; state retained for recovery"
                     )
@@ -433,7 +452,7 @@ class RealSession:
                     received_text += len(delta.encode())
                     if received_text > 8 * 1024 * 1024:
                         raise RuntimeError("Codex report exceeded the 8 MiB text limit")
-                    text_parts.append(delta)
+                    # Deltas may be commentary; only authoritative completed final items count.
                 elif event.method == "item/completed":
                     item = params.get("item", {})
                     if item.get("type") == "agentMessage":
@@ -441,12 +460,21 @@ class RealSession:
                         received_text += len(completed.encode())
                         if received_text > 8 * 1024 * 1024:
                             raise RuntimeError("Codex report exceeded the 8 MiB text limit")
-                        completed_text.append(completed)
+                        if item.get("phase") == "final_answer":
+                            final_text = completed
+                        elif item.get("phase") is None:
+                            # Older app-server versions lack phases. Accept only a valid report.
+                            try:
+                                parse_report(completed)
+                            except ValueError:
+                                pass
+                            else:
+                                final_text = completed
                     # Completed units avoid fragments that can split secrets.
                     safe = json.dumps(redact_value(item, self.redactor), ensure_ascii=False)
                     await self.log(safe)
                 elif event.method == "error":
-                    await self.log(self.redactor.redact(json.dumps(params)))
+                    await self.log(self.redactor.redact(json.dumps({"type": "error", **params})))
                 elif event.method == "turn/completed":
                     turn = params.get("turn", {})
                     if turn.get("id") != turn_id:
@@ -457,23 +485,18 @@ class RealSession:
                             raise ProviderLimited("Provider usage limit prevents further work")
                         raise RuntimeError(self.redactor.redact(json.dumps(turn.get("error"))))
                     if status == "interrupted":
-                        if pending_runtime or pending_github:
+                        if not cancel.is_set() and (pending_runtime or pending_github):
                             await self._rotate(pending_runtime, pending_github, model)
-                            return RunReport(
-                                summary="Turn interrupted for credential renewal.",
-                                remaining=[
-                                    "Inspect current changes and process state before continuing."
-                                ],
-                                suggested_next_action=(
-                                    "Continue from observed state; do not replay actions."
-                                ),
+                            raise ResumeRequired(
+                                "Turn interrupted for credential renewal; "
+                                "inspect current state before continuing."
                             )
                         if cancel.is_set():
                             raise asyncio.CancelledError
                         raise RuntimeError("Codex turn unexpectedly interrupted")
                     if status != "completed":
                         raise RuntimeError(f"Unexpected turn status: {status}")
-                    report = parse_report("\n".join(completed_text) or "".join(text_parts))
+                    report = parse_report(final_text or "")
                     return RunReport.model_validate(
                         redact_value(report.model_dump(), self.redactor)
                     )

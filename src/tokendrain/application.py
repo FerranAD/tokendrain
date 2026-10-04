@@ -22,7 +22,7 @@ from tokendrain.orchestration.driver import RealSessionFactory, SessionFactory
 from tokendrain.orchestration.mock import MockSessionFactory, MockStorage, MockVmBackend
 from tokendrain.orchestration.supervisor import Supervisor
 from tokendrain.scheduler.service import Scheduler
-from tokendrain.security import SessionTokens, protected_file, stable_host_id
+from tokendrain.security import SessionTokens, protected_file
 from tokendrain.services import ProjectService, RunService
 from tokendrain.storage import FileProjectStorage
 from tokendrain.storage.files import ProjectStorage
@@ -87,13 +87,18 @@ class Application:
                 await asyncio.to_thread(protected_file, settings.master_key_file, raw=True)
             key = await asyncio.to_thread(load_master_key, settings.master_key_file)
             credentials = EncryptedFileCredentialStore(settings.state_dir / "credentials", key)
-            admin_path = settings.admin_token_file or settings.state_dir / "admin-token"
-            token = (await asyncio.to_thread(protected_file, admin_path)).decode()
-            host_id = await asyncio.to_thread(stable_host_id, settings.state_dir / "host-id")
+            if settings.auth_mode == "token":
+                if settings.admin_token_file is None:
+                    raise ValueError(
+                        "Token auth requires TOKENDRAIN_ADMIN_TOKEN_FILE; "
+                        "set TOKENDRAIN_AUTH_MODE=none to disable login"
+                    )
+                token = (await asyncio.to_thread(settings.admin_token_file.read_text)).strip()
+                tokens = SessionTokens(token)
+            else:
+                tokens = SessionTokens(None)
             http = overrides.http or httpx.AsyncClient(timeout=30, follow_redirects=False)
-            auth = OpenAIAuthManager(
-                credentials, http, host_id, runtime_dir=settings.auth_runtime_dir
-            )
+            auth = OpenAIAuthManager(credentials, http, runtime_dir=settings.auth_runtime_dir)
             github = GitHubProvider(credentials, http)
             async with sessions() as db:
                 saved = await db.get(Setting, "platform")
@@ -152,7 +157,7 @@ class Application:
                 events,
                 scheduler,
                 supervisor,
-                SessionTokens(token),
+                tokens,
                 lock,
                 time.monotonic(),
                 probe_lock=asyncio.Lock(),

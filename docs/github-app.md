@@ -83,3 +83,7 @@ The user-granted project permissions authorize autonomous work. There is no addi
 - **Compromised access:** revoke the installation or credentials at GitHub. Disconnecting the project stops future injection but cannot erase copies already made by arbitrary guest software.
 
 See [security](security.md) for storage/redaction limits and [OpenAI authentication](openai-auth.md) for the independent model-account connection. The implementation follows GitHub's documented API and treats token strings as opaque; it does not assume a fixed installation-token length.
+
+## Publishing contributions
+
+For a project that should publish a branch and open a PR, grant **Contents: write** and **Pull requests: write** on its selected target repository. PR write alone cannot publish the source branch. The project form warns about this combination before saving. Repository selection is searchable. Provider branch rules and installation permissions still apply.

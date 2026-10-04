@@ -15,7 +15,7 @@ export interface Report {
   blockers: string[];
   changes?: { files_changed: number; insertions: number; deletions: number; commits?: string[] };
   suggested_next_action?: string;
-  task_log?: string;
+
   usage?: { start: UsageWindow[]; end: UsageWindow[] };
 }
 
@@ -23,7 +23,7 @@ export interface Project {
   id: string;
   name: string;
   description: string;
-  task_log: string;
+
   next_run_feedback: string;
   status: string;
   default_model: string;
@@ -32,6 +32,7 @@ export interface Project {
   updated_at: string;
   last_run_at?: string | null;
   latest_report?: Report | null;
+  latest_execution?: Execution | null;
   environment_metadata?: Record<string, unknown>;
   workspace_metadata?: Record<string, unknown>;
 }
@@ -52,6 +53,7 @@ export interface RunTemplate {
   projects: ProjectConfig[];
   stop_conditions: StopCondition[];
   parallel: boolean;
+  threshold_mode?: 'graceful' | 'hard';
 }
 
 export interface Execution {
@@ -65,7 +67,12 @@ export interface Execution {
   started_at?: string | null;
   finished_at?: string | null;
   error?: string | null;
+  termination_reason?: string | null;
+  termination_detail?: string | null;
+  threshold_mode?: 'graceful' | 'hard' | null;
+  interrupted?: boolean;
   report?: Report | null;
+  checkpoint_from_execution_id?: string | null;
   thread_id?: string | null;
 }
 
@@ -76,6 +83,7 @@ export interface Run {
   started_at?: string | null;
   finished_at?: string | null;
   parallel: boolean;
+  threshold_mode?: 'graceful' | 'hard';
   stop_conditions: StopCondition[];
   executions: Execution[];
 }
@@ -115,6 +123,8 @@ export interface SystemInfo {
 
 export interface OpenAIStatus {
   connected: boolean;
+  valid?: boolean;
+  credential_error?: string;
   method?: string;
   account_label?: string;
   login?: { id: string; url: string; status: string; error?: string };
@@ -160,6 +170,7 @@ export interface StorageInfo {
 }
 
 export interface Snapshot {
+  run_id?: string | null;
   id: string;
   name: string;
   created_at: string;
@@ -176,4 +187,15 @@ export interface LiveEvent {
   run_id?: string;
   project_id?: string;
   data?: Record<string, unknown>;
+}
+
+export type TaskColumn = 'backlog' | 'todo' | 'in_progress' | 'done';
+export interface Task {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  column: TaskColumn;
+  position: number;
+  origin: 'user' | 'agent';
 }

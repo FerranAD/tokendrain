@@ -80,7 +80,10 @@ async def test_host_doctor_does_not_hide_service_failures(tmp_path: Path, monkey
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json=result))
     ) as client:
         status = await execute(
-            parser().parse_args(["doctor"]), Settings(state_dir=tmp_path), client, output
+            parser().parse_args(["doctor"]),
+            Settings(state_dir=tmp_path, admin_token_file=token_path),
+            client,
+            output,
         )
     assert status == 1
     assert "OK   kvm:" in output.getvalue()

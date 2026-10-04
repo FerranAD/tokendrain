@@ -163,18 +163,6 @@ class GuestDaemon:
             "-c",
             'cli_auth_credentials_store="ephemeral"',
         ]
-        if self.credentials.openai.mode == "siwc":
-            env["ACCESS_TOKEN"] = self.credentials.openai.access_token
-            for setting in [
-                'model_provider="openai_chatgpt_plan"',
-                'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
-                'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
-                'model_providers.openai_chatgpt_plan.env_key="ACCESS_TOKEN"',
-                'model_providers.openai_chatgpt_plan.wire_api="responses"',
-                "model_providers.openai_chatgpt_plan.requires_openai_auth=false",
-                "model_providers.openai_chatgpt_plan.supports_websockets=false",
-            ]:
-                arguments.extend(["-c", setting])
         self.process = await asyncio.create_subprocess_exec(
             *arguments,
             env=env,

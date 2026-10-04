@@ -69,11 +69,10 @@ Accumulated report text is limited to 8 MiB per turn.
 The OpenAI runtime credential object contains:
 
 ```json
-{"mode":"siwc","access_token":"<runtime-only>","expires_at":1790971200,"account_id":null,"plan_type":null}
+{"mode":"chatgpt","access_token":"<runtime-only>","expires_at":1790971200,"account_id":null,"plan_type":null}
 ```
 
-For imported Codex credentials, `mode` is `chatgpt` and `account_id` is the
-selected ChatGPT account/workspace. Neither form contains a refresh token, ID
+`account_id` is the selected ChatGPT account/workspace. The runtime object contains no a refresh token, ID
 token, imported auth file, host master key, or GitHub App private key.
 
 `secrets` maps valid environment variable names to values. Protected process

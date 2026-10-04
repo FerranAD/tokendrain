@@ -110,6 +110,7 @@
               imports = [ self.nixosModules.tokendrain ];
               documentation.enable = false;
               services.tokendrain.enable = true;
+              services.tokendrain.auth.mode = "none";
               # Regression: coexist with forwarding already enabled by a VPN module.
               boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
               # Service/API smoke test does not boot a nested Firecracker VM.

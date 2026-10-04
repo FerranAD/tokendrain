@@ -37,7 +37,7 @@ def make_server(app: FastAPI, settings: Settings) -> uvicorn.Server:
             port=settings.port,
             workers=1,
             log_config=None,
-            access_log=False,  # OAuth callback URLs contain authorization codes.
+            access_log=False,  # Keep request metadata out of operational logs.
             # SSE streams otherwise hold HTTP draining open indefinitely. The
             # separate application lifespan retains its full VM shutdown budget.
             timeout_graceful_shutdown=5,

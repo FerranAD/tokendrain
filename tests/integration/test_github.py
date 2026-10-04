@@ -113,8 +113,16 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
         raise AssertionError(path)
 
     upstream = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    token_file = tmp_path / "admin-token"
+    token_file.write_text("t" * 48)
+    token_file.chmod(0o600)
     app = create_app(
-        Settings(state_dir=tmp_path, backend="mock", public_url="http://testserver"),
+        Settings(
+            state_dir=tmp_path,
+            backend="mock",
+            public_url="http://testserver",
+            admin_token_file=token_file,
+        ),
         Overrides(http=upstream, start_workers=False),
     )
     async with LifespanManager(app):

@@ -3,11 +3,13 @@ import json
 import logging
 import time
 from datetime import UTC
+from difflib import SequenceMatcher
 from typing import Any
 from uuid import UUID
 
 from pydantic import TypeAdapter
-from sqlalchemy import select
+from pydantic_core import to_jsonable_python
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tokendrain.config import Settings
@@ -34,8 +36,13 @@ from tokendrain.domain import (
 )
 from tokendrain.events import EventBus
 from tokendrain.github.provider import GitHubProvider, InstallationToken, IntegrationInput
-from tokendrain.orchestration.driver import ProviderLimited, SessionFactory, WorkSession
-from tokendrain.services import ProjectService, RunService
+from tokendrain.orchestration.driver import (
+    ProviderLimited,
+    ResumeRequired,
+    SessionFactory,
+    WorkSession,
+)
+from tokendrain.services import ProjectService, RunService, latest_checkpoint
 from tokendrain.storage.files import ProjectStorage
 from tokendrain.vm.models import VmBackend, VmHandle, VmSpec
 
@@ -91,26 +98,8 @@ class Supervisor:
                     "Workspace retained; inspect before resuming."
                 )
                 execution.finished_at = utcnow()
-                saved_report = await db.get(Report, execution.id)
-                recovery_report = (
-                    RunReport.model_validate(saved_report.content)
-                    if saved_report
-                    else RunReport(summary="Daemon restarted before a final report was available.")
-                )
-                recovery_report.status = "failed"
-                recovery_report.blockers.append(execution.error)
-                recovery_report.suggested_next_action = (
-                    "Inspect the persisted workspace and thread before continuing."
-                )
-                if saved_report:
-                    saved_report.content = recovery_report.model_dump(mode="json")
-                else:
-                    db.add(
-                        Report(
-                            execution_id=execution.id,
-                            content=recovery_report.model_dump(mode="json"),
-                        )
-                    )
+                execution.termination_reason = "infrastructure_error"
+                execution.interrupted = True
                 project = await db.get(Project, execution.project_id)
                 if project:
                     project.status = "failed"
@@ -136,7 +125,11 @@ class Supervisor:
             if not states or any(state not in {s.value for s in TERMINAL} for state in states):
                 return
             run.status = next(
-                (state for state in ("failed", "cancelled", "blocked") if state in states),
+                (
+                    state
+                    for state in ("failed", "cancelled", "blocked", "stopped")
+                    if state in states
+                ),
                 "completed",
             )
             run.finished_at = utcnow()
@@ -211,13 +204,7 @@ class Supervisor:
             clock_started = time.monotonic()
             project_id, run_id = project.id, run.id
             policy = TypeAdapter(list[StopCondition]).validate_python(run.stop_conditions)
-            previous_report = await db.scalar(
-                select(Report.content)
-                .join(ProjectExecution)
-                .where(ProjectExecution.project_id == project_id)
-                .order_by(Report.created_at.desc())
-                .limit(1)
-            )
+            previous_report, _ = await latest_checkpoint(db, project_id)
             integration = await db.get(ProjectGitHub, project_id)
             app = await db.get(GitHubApp, 1)
             secrets_rows = list(
@@ -235,7 +222,15 @@ class Supervisor:
         report = RunReport(summary="Execution stopped before a report was produced.")
         windows: list[UsageWindow] = []
         starting_windows: list[UsageWindow] = []
-        original_task_log = project.task_log
+        termination_reason: str | None = None
+        termination_detail: str | None = None
+        interrupted = False
+        budget = asyncio.Event()
+        turn_cancel = asyncio.Event()
+        grace_started = False
+        prior_fingerprint: str | None = None
+        prior_progress: str | None = None
+        repeats = 0
         runtime_values: dict[str, str] = {}
         redactor = SecretRedactor()
 
@@ -258,7 +253,101 @@ class Supervisor:
         async def observe(value: list[UsageWindow]) -> None:
             nonlocal windows
             windows = value
+            await check_boundary(value)
             await self.runs.observe(value, execution_id)
+            windows = value
+
+        async def check_boundary(observed: list[UsageWindow] | None = None) -> None:
+            nonlocal termination_reason, termination_detail
+            if budget.is_set() or grace_started:
+                return
+            boundary_windows = observed if observed is not None else windows
+            reason = stop_reason(policy, boundary_windows, elapsed())
+            if not reason:
+                return
+            termination_reason = (
+                "usage_threshold"
+                if any(
+                    isinstance(rule, UsageStop) and stop_reason([rule], boundary_windows, elapsed())
+                    for rule in policy
+                )
+                else "runtime_limit"
+            )
+            termination_detail = reason
+            budget.set()
+            turn_cancel.set()
+            async with self.sessions.begin() as db:
+                live = await db.get(ProjectExecution, execution_id)
+                assert live
+                live.termination_reason = termination_reason
+                live.termination_detail = reason
+                live.threshold_mode = run.threshold_mode
+            async with self.sessions() as db:
+                live = await db.get(ProjectExecution, execution_id)
+                assert live
+                state = ExecutionState(live.status)
+            if state == ExecutionState.RUNNING:
+                await self.runs.transition(execution_id, ExecutionState.STOPPING)
+            await self.events.publish(
+                "execution.usage_stop",
+                reason,
+                run_id=run_id,
+                project_id=project_id,
+                execution_id=execution_id,
+                data={"mode": run.threshold_mode, "reason": termination_reason},
+            )
+
+        async def monitored_turn(prompt: str, *, finalizing: bool = False) -> RunReport:
+            assert session
+            turn_cancel.clear()
+            if cancel.is_set() or (budget.is_set() and not finalizing):
+                turn_cancel.set()
+                raise asyncio.CancelledError
+
+            async def monitor() -> None:
+                nonlocal windows
+                interrupt_started: float | None = None
+                while True:
+                    if cancel.is_set():
+                        turn_cancel.set()
+                    if not finalizing:
+                        latest = await self.runs.latest_usage()
+                        if latest and (
+                            not windows
+                            or max(w.observed_at.timestamp() for w in latest)
+                            >= max(w.observed_at.timestamp() for w in windows)
+                        ):
+                            windows = latest
+                        await check_boundary()
+                    if turn_cancel.is_set():
+                        interrupt_started = interrupt_started or time.monotonic()
+                        if time.monotonic() - interrupt_started > 12:
+                            raise TimeoutError("Codex interrupt timed out; workspace preserved")
+                    await asyncio.sleep(0.25)
+
+            watcher = asyncio.create_task(monitor())
+            work = asyncio.create_task(
+                session.turn(prompt, execution.model, execution.reasoning_effort, turn_cancel)
+            )
+            try:
+                done, _ = await asyncio.wait(
+                    {work, watcher},
+                    timeout=90 if finalizing else None,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if watcher in done:
+                    await watcher
+                if not done:
+                    turn_cancel.set()
+                    await asyncio.wait(
+                        {work, watcher}, timeout=12, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    raise TimeoutError("Grace period expired; workspace preserved")
+                return await work
+            finally:
+                watcher.cancel()
+                work.cancel()
+                await asyncio.gather(watcher, work, return_exceptions=True)
 
         async def github_token() -> InstallationToken | None:
             if integration and app:
@@ -287,7 +376,7 @@ class Supervisor:
                         raise asyncio.CancelledError
                     if reason := stop_reason(policy, [], elapsed()):
                         raise BudgetReached(reason)
-                    await self.projects.snapshot(project_id, f"Before run {run_id[:8]}")
+                    await self.projects.snapshot(project_id, f"Before run {run_id[:8]}", run_id)
                     if cancel.is_set():
                         raise asyncio.CancelledError
                     for secret in secrets_rows:
@@ -327,15 +416,44 @@ class Supervisor:
                     await self.runs.transition(execution_id, ExecutionState.RUNNING)
                     starting_windows = await session.usage()
                     windows = starting_windows
-                    prompt = self.context(project, integration, secrets_rows, previous_report)
+                    prompt = self.context(
+                        project,
+                        integration,
+                        secrets_rows,
+                        previous_report,
+                        await self.projects.tasks(project_id),
+                    )
                     while True:
                         if cancel.is_set():
                             raise asyncio.CancelledError
-                        reason = stop_reason(policy, windows, elapsed())
-                        if reason:
-                            await emit(reason)
-                            if report.summary == "Execution stopped before a report was produced.":
-                                report.summary = reason
+                        await check_boundary()
+                        if budget.is_set():
+                            final = ExecutionState.STOPPED
+                            if run.threshold_mode == "hard":
+                                break
+                            grace_started = True
+                            try:
+                                report = await monitored_turn(
+                                    "The configured budget boundary has been reached. "
+                                    "Stop new substantive work. Settle what is reasonable, "
+                                    "leave the workspace coherent, save/commit where appropriate, "
+                                    "update Kanban and return a final checkpoint. "
+                                    "You have at most 90 seconds. Do not start new work.\n"
+                                    + json.dumps(
+                                        to_jsonable_python(
+                                            {"kanban": await self.projects.tasks(project_id)}
+                                        )
+                                    ),
+                                    finalizing=True,
+                                )
+                                report.usage = ReportUsage(start=starting_windows, end=windows)
+                                await self.save_report(execution_id, project_id, report)
+                                interrupted = False
+                            except (TimeoutError, asyncio.CancelledError):
+                                interrupted = True
+                                if cancel.is_set():
+                                    raise asyncio.CancelledError from None
+                                await emit("Grace period ended; workspace preserved.")
                             break
                         requested = [rule for rule in policy if isinstance(rule, UsageStop)]
                         for rule in requested:
@@ -353,9 +471,30 @@ class Supervisor:
                                     "Requested usage limit cannot be observed from this "
                                     "account/provider. Use a runtime limit or reconnect."
                                 )
-                        report = await session.turn(
-                            prompt, execution.model, execution.reasoning_effort, cancel
-                        )
+                        try:
+                            report = await monitored_turn(prompt)
+                        except ResumeRequired as error:
+                            await emit(str(error))
+                            prompt += (
+                                "\nInspect existing changes and processes; do not replay actions."
+                            )
+                            continue
+                        except TimeoutError:
+                            interrupted = True
+                            if cancel.is_set():
+                                raise asyncio.CancelledError from None
+                            if budget.is_set():
+                                final = ExecutionState.STOPPED
+                                termination_detail = (
+                                    termination_detail or "Budget reached"
+                                ) + "; interrupt timed out. Workspace preserved."
+                                break
+                            raise
+                        except asyncio.CancelledError:
+                            if budget.is_set() and not cancel.is_set():
+                                interrupted = True
+                                continue
+                            raise
                         async with self.sessions.begin() as db:
                             live_project = await db.get(Project, project_id)
                             if (
@@ -364,54 +503,111 @@ class Supervisor:
                             ):
                                 live_project.next_run_feedback = ""
                         report.usage = ReportUsage(start=starting_windows, end=windows)
-                        original_task_log = await self.save_report(
-                            execution_id, project_id, report, original_task_log
-                        )
+                        await self.save_report(execution_id, project_id, report)
+                        if cancel.is_set():
+                            raise asyncio.CancelledError
+                        if budget.is_set():
+                            continue
                         if report.status == "completed":
+                            termination_reason = "project_completed"
                             break
                         if report.status == "blocked":
                             final = ExecutionState.BLOCKED
+                            termination_reason = "blocked"
                             break
                         if report.status in {"failed", "cancelled"}:
-                            final = ExecutionState.FAILED
+                            final = (
+                                ExecutionState.CANCELLED
+                                if report.status == "cancelled"
+                                else ExecutionState.FAILED
+                            )
+                            termination_reason = "agent_" + report.status
                             error_text = report.summary
                             break
-                        # Useful turns are the stopping boundary, never individual shell commands.
-                        windows = await session.usage()
-                        prompt = (
-                            "Continue autonomous work towards the project description. Inspect "
-                            "workspace and existing processes first; "
-                            "do not replay earlier actions. "
-                            "Finish a substantial useful unit, verify it, "
-                            "update the durable task log, "
-                            "and return the structured report. "
-                            "If finished or irrecoverably blocked, "
-                            "say so. Previous summary: " + report.summary
+                        fingerprint = json.dumps(
+                            {
+                                "completed": sorted(report.completed),
+                                "remaining": sorted(report.remaining),
+                                "blockers": sorted(report.blockers),
+                                "changes": report.changes.model_dump(),
+                                "tasks": [
+                                    {
+                                        key: task[key]
+                                        for key in (
+                                            "id",
+                                            "title",
+                                            "description",
+                                            "column",
+                                            "position",
+                                        )
+                                    }
+                                    for task in await self.projects.tasks(project_id)
+                                ],
+                            },
+                            sort_keys=True,
                         )
+                        # Cumulative change counts do not prove new progress between turns.
+                        checkpoint = json.loads(fingerprint)
+                        progress = json.dumps(
+                            {"changes": checkpoint["changes"], "tasks": checkpoint["tasks"]},
+                            sort_keys=True,
+                        )
+                        equivalent = progress == prior_progress and (
+                            fingerprint == prior_fingerprint
+                            or SequenceMatcher(None, fingerprint, prior_fingerprint or "").ratio()
+                            >= 0.97
+                        )
+                        repeats = repeats + 1 if equivalent else 0
+                        prior_progress = progress
+                        prior_fingerprint = fingerprint
+                        if repeats >= 2:
+                            final = ExecutionState.STOPPED
+                            termination_reason = "no_progress"
+                            termination_detail = (
+                                "Three equivalent checkpoints; stopped to avoid a work loop."
+                            )
+                            await emit(termination_detail)
+                            break
+                        windows = await session.usage()
                         async with self.sessions() as db:
                             current = await db.get(Project, project_id)
-                            if current:
-                                prompt += "\nCurrent description: " + current.description
-                                prompt += "\nCurrent task log: " + current.task_log
+                            assert current
+                        prompt = self.context(
+                            current,
+                            integration,
+                            secrets_rows,
+                            report.model_dump(mode="json"),
+                            await self.projects.tasks(project_id),
+                        )
                 except BudgetReached as error:
-                    report.summary = str(error)
+                    final = ExecutionState.STOPPED
+                    termination_reason = "runtime_limit"
+                    termination_detail = str(error)
                     await emit(str(error))
                 except ProviderLimited:
                     reason = "Provider usage limit prevents another turn; retained last report."
-                    if report.summary == "Execution stopped before a report was produced.":
-                        report.summary = reason
+                    final = ExecutionState.STOPPED
+                    termination_reason = "provider_limit"
+                    termination_detail = reason
+                    interrupted = True
                     await emit(reason)
                 except asyncio.CancelledError:
                     if cancel.is_set():
                         final = ExecutionState.CANCELLED
                         error_text = "Cancelled by user"
+                        termination_reason = "user_cancelled"
+                        interrupted = True
                     else:
                         final = ExecutionState.FAILED
                         error_text = (
                             "Daemon stopped during execution; state retained for inspection"
                         )
+                        termination_reason = "infrastructure_error"
+                        interrupted = True
                 except Exception as error:
                     final = ExecutionState.FAILED
+                    termination_reason = "infrastructure_error"
+                    interrupted = True
                     error_text = redactor.redact(f"{type(error).__name__}: {error}")
                     await emit(error_text)
                 finally:
@@ -426,6 +622,7 @@ class Supervisor:
                             await self.runs.transition(execution_id, ExecutionState.STOPPING)
                     except Exception as error:
                         final = ExecutionState.FAILED
+                        termination_reason = "infrastructure_error"
                         error_text = f"Execution state persistence failed: {type(error).__name__}"
                         await emit(error_text)
                     if session:
@@ -433,6 +630,7 @@ class Supervisor:
                             await session.close()
                         except Exception as error:
                             final = ExecutionState.FAILED
+                            termination_reason = "infrastructure_error"
                             error_text = f"Guest shutdown failed: {type(error).__name__}"
                             await emit(error_text)
                     if start_attempted and handle is None:
@@ -454,11 +652,14 @@ class Supervisor:
                         await self.runs.transition(execution_id, ExecutionState.STOPPING)
                     if state == ExecutionState.QUEUED:
                         final = ExecutionState.FAILED
-                    report.usage = ReportUsage(start=starting_windows, end=windows)
-                    if final in {ExecutionState.FAILED, ExecutionState.CANCELLED}:
-                        report.status = "failed" if final == ExecutionState.FAILED else "cancelled"
-                        report.blockers.append(error_text or "Infrastructure interrupted execution")
-                    await self.save_report(execution_id, project_id, report, original_task_log)
+                    async with self.sessions.begin() as db:
+                        live = await db.get(ProjectExecution, execution_id)
+                        assert live
+                        live.termination_reason = termination_reason or "infrastructure_error"
+                        live.termination_detail = termination_detail or error_text
+                        live.threshold_mode = run.threshold_mode if budget.is_set() else None
+                        live.interrupted = interrupted
+                    # Only valid model checkpoints are saved. Host outcomes never rewrite them.
                     await self.runs.transition(execution_id, final, error_text)
         except asyncio.CancelledError:
             # Cancellation while waiting for the lease never attached disks.
@@ -498,21 +699,38 @@ class Supervisor:
             runtime_values.clear()
             await self.finish_run(run_id)
 
-    async def save_report(
-        self, execution_id: str, project_id: str, report: RunReport, expected_task_log: str
-    ) -> str:
+    async def save_report(self, execution_id: str, project_id: str, report: RunReport) -> None:
         async with self.sessions.begin() as db:
+            await db.execute(text("BEGIN IMMEDIATE"))
+            live = await db.get(ProjectExecution, execution_id)
+            assert live
+            run_id = live.run_id
             row = await db.get(Report, execution_id)
             if row:
                 row.content = report.model_dump(mode="json")
                 row.created_at = utcnow()
             else:
                 db.add(Report(execution_id=execution_id, content=report.model_dump(mode="json")))
-            project = await db.get(Project, project_id)
-            if project and report.task_log and project.task_log == expected_task_log:
-                project.task_log = report.task_log
-                expected_task_log = report.task_log
-        return expected_task_log
+        try:
+            async with self.sessions.begin() as db:
+                await db.execute(text("BEGIN IMMEDIATE"))
+                await self.projects.mutate_tasks_in(db, project_id, report.task_updates, agent=True)
+        except ValueError as error:
+            await self.events.publish(
+                "execution.activity",
+                "Kanban update rejected: " + str(error),
+                run_id=run_id,
+                execution_id=execution_id,
+                project_id=project_id,
+            )
+        await self.events.publish(
+            "agent.checkpoint",
+            report.summary,
+            run_id=run_id,
+            execution_id=execution_id,
+            project_id=project_id,
+            data={"report": report.model_dump(mode="json")},
+        )
 
     @staticmethod
     def context(
@@ -520,11 +738,12 @@ class Supervisor:
         integration: ProjectGitHub | None,
         secrets: list[SecretEntry],
         previous_report: dict[str, Any] | None = None,
+        tasks: list[dict[str, Any]] | None = None,
     ) -> str:
         context: dict[str, Any] = {
             "project": project.name,
             "description": project.description,
-            "task_log": project.task_log,
+            "kanban": tasks or [],
             "feedback": project.next_run_feedback,
             "workspace": "/workspace",
             "persistent_environment": "/persist",
@@ -545,8 +764,13 @@ class Supervisor:
             "Use /workspace for source. Secrets are runtime environment variables; "
             "never copy or log "
             "their values into persistent files. Use GitHub only within the listed permissions. "
-            "Keep TASK_LOG.md in /workspace updated, and include its current text in task_log in "
-            "your structured report. Return an honest report after a meaningful work unit, marking "
-            "completed only when the project objective is achieved, blocked only when you cannot "
-            "make useful progress. Do not ask for approvals.\n" + json.dumps(context)
+            "Resume In progress tasks first, then Todo. Backlog is human-controlled approval: "
+            "never promote or work Backlog tasks. Create discovered work only in Backlog. "
+            "Use task_updates with stable task IDs to edit/move tasks; id null creates a new "
+            "Backlog task. When no In progress or Todo tasks remain, report completed because "
+            "there is no currently approved work; do not invent work to consume turns. "
+            "Return an honest report after a meaningful work unit, marking "
+            "completed when approved work is finished, blocked only when you cannot "
+            "make useful progress. Do not ask for approvals.\n"
+            + json.dumps(to_jsonable_python(context))
         )

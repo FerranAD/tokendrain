@@ -15,7 +15,6 @@ const project = {
   id: 'project-a',
   name: 'Package telescope',
   description: 'Package the CLI, run its tests, and prepare a contribution.',
-  task_log: '- [ ] Package upstream release',
   next_run_feedback: '',
   status: 'idle',
   default_model: 'codex-test',
@@ -78,6 +77,8 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
     if (!signedIn)
       return route.fulfill({ status: 401, json: { detail: 'Authentication required' } });
     const resources: Record<string, unknown> = {
+      '/session': { authenticated: true, auth_mode: 'token' },
+      '/projects/project-a/tasks': [],
       '/system': system,
       '/projects': [current, second],
       '/projects/project-a': current,
@@ -87,9 +88,10 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
       '/runs': [],
       '/schedules': [],
       '/usage': windows,
-      '/auth/openai': { connected: true, method: 'siwc', account_label: 'user@example.test' },
+      '/auth/openai': { connected: true, method: 'import', account_label: 'user@example.test' },
       '/auth/openai/models': [
         { id: 'codex-test', name: 'Codex Test', reasoning_efforts: ['low', 'medium', 'high'] },
+        { id: 'codex-other', name: 'Other', reasoning_efforts: ['medium', 'high'] },
       ],
       '/integrations/github': {
         configured: true,
@@ -142,7 +144,7 @@ test('administration login uses a session and leaves no token in browser storage
   await page.goto('/');
   await page.getByLabel('Administration token').fill('test-only-admin-token');
   await page.getByRole('button', { name: 'Open tokendrain' }).click();
-  await expect(page.getByRole('heading', { name: 'Your work, moving forward.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Usage & runs' })).toBeVisible();
   expect(writes[0]).toEqual({
     path: '/session',
     method: 'POST',
@@ -155,8 +157,8 @@ test('administration login uses a session and leaves no token in browser storage
 test('dashboard renders provider metadata and creates a persistent project', async ({ page }) => {
   const { writes, errors } = await fixture(page);
   await page.goto('/');
-  await expect(page.getByText('12 hours window', { exact: true })).toBeVisible();
-  await expect(page.getByText('14 days window', { exact: true })).toBeVisible();
+  await expect(page.getByText(/12 hours window/)).toBeVisible();
+  await expect(page.getByText(/14 days window/)).toBeVisible();
   await page.screenshot({ path: 'test-results/dashboard.png', fullPage: true });
   await page.getByRole('button', { name: 'New project' }).click();
   await page.getByLabel('Project name', { exact: true }).fill('Useful project');
@@ -168,6 +170,7 @@ test('dashboard renders provider metadata and creates a persistent project', asy
   expect(writes.find((write) => write.path === '/projects')?.body).toEqual({
     name: 'Useful project',
     description: 'Build something useful and test it.',
+    initial_tasks: [],
   });
   expect(errors).toEqual([]);
 });
@@ -177,7 +180,10 @@ test('run preparation serializes per-project models and actual usage windows', a
   await page.goto('/prepare?project=project-a');
   await expect(page.getByRole('checkbox', { name: /Package telescope/ })).toBeChecked();
   await page.getByRole('checkbox', { name: /Build a todo app/ }).check();
-  await page.getByLabel('Model', { exact: true }).nth(1).fill('codex-other');
+  await page
+    .getByRole('combobox', { name: 'Model', exact: true })
+    .nth(1)
+    .selectOption('codex-other');
   await page.getByRole('combobox', { name: 'Reasoning', exact: true }).nth(1).selectOption('high');
   await page.getByRole('checkbox', { name: /General allowance.*12 hours/ }).check();
   await page.getByRole('spinbutton', { name: 'Usage threshold percent' }).first().fill('88');
@@ -199,6 +205,7 @@ test('run preparation serializes per-project models and actual usage windows', a
       { kind: 'elapsed', seconds: 9000 },
     ],
     parallel: false,
+    threshold_mode: 'graceful',
   });
   expect(errors).toEqual([]);
 });
@@ -206,12 +213,11 @@ test('run preparation serializes per-project models and actual usage windows', a
 test('task edits and described dotenv import reach separate project APIs', async ({ page }) => {
   const { writes, errors } = await fixture(page);
   await page.goto('/projects/project-a');
-  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
-  await page
-    .getByRole('textbox', { name: 'Shared task log' })
-    .fill('- [x] First change\n- [ ] Next change');
-  await page.getByRole('button', { name: 'Save changes' }).click();
-  await expect(page.getByRole('status')).toContainText('Changes saved');
+  await page.getByRole('button', { name: 'Kanban', exact: true }).click();
+  await page.getByRole('button', { name: 'Add task', exact: false }).first().click();
+  await page.getByLabel('Title', { exact: true }).fill('Next useful change');
+  await page.getByLabel('Details', { exact: true }).fill('Build and verify');
+  await page.getByRole('button', { name: 'Save task', exact: true }).click();
   await page.getByRole('button', { name: 'Secrets', exact: true }).click();
   await page
     .getByRole('textbox', { name: '.env content' })
@@ -220,9 +226,9 @@ test('task edits and described dotenv import reach separate project APIs', async
   await page.getByLabel('Purpose of SECOND_KEY').fill('Local test service');
   await page.getByRole('button', { name: 'Import 2 secrets' }).click();
   await expect(page.getByRole('textbox', { name: '.env content' })).toHaveValue('');
-  expect(writes.find((write) => write.path === '/projects/project-a')?.body).toEqual({
-    task_log: '- [x] First change\n- [ ] Next change',
-  });
+  expect(writes.find((write) => write.path === '/projects/project-a/tasks')?.body).toEqual([
+    { title: 'Next useful change', description: 'Build and verify', column: 'todo' },
+  ]);
   expect(writes.find((write) => write.path.endsWith('/secrets/import'))?.body).toEqual({
     dotenv: 'TEST_KEY=runtime-value\nSECOND_KEY=second-value',
     descriptions: { TEST_KEY: 'Integration tests only', SECOND_KEY: 'Local test service' },
@@ -235,7 +241,7 @@ test('GitHub repository access narrows installation permissions', async ({ page 
   await page.goto('/projects/project-a');
   await page.getByRole('button', { name: 'GitHub', exact: true }).click();
   await page.getByRole('combobox', { name: 'Installation', exact: true }).selectOption('123');
-  await page.getByRole('combobox', { name: 'Repository', exact: true }).selectOption('55');
+  await page.getByRole('combobox', { name: 'Repository', exact: true }).fill('octocat/telescope');
   await page
     .getByRole('combobox', { name: 'Repository contents', exact: true })
     .selectOption('write');
@@ -275,6 +281,7 @@ test('schedules use the ordinary run template with timezone-aware timing', async
       projects: [{ project_id: 'project-a', model: 'codex-test', reasoning_effort: 'medium' }],
       stop_conditions: [{ kind: 'provider_limit' }, { kind: 'project_completed' }],
       parallel: true,
+      threshold_mode: 'graceful',
     },
   });
   expect(errors).toEqual([]);
@@ -303,7 +310,7 @@ test('live SSE execution events are rendered as text', async ({ page }) => {
     }),
   );
   await page.goto('/runs/run-1234');
-  await page.getByRole('button', { name: 'Live events' }).click();
+  await page.getByRole('button', { name: 'Activity' }).click();
   await expect(page.getByRole('log')).toContainText(
     'Tests passed. <script>alert("unsafe")</script>',
   );
@@ -358,5 +365,164 @@ test('GitHub setup return requires authenticated discovery instead of trusting q
   await page.getByRole('button', { name: 'Discover installed repositories' }).click();
   await expect(page).toHaveURL(/\/settings$/);
   expect(writes).toEqual([{ path: '/integrations/github/sync', method: 'POST', body: {} }]);
+  expect(errors).toEqual([]);
+});
+
+test('Kanban drag moves cards and preserves ordering', async ({ page }) => {
+  const { errors } = await fixture(page);
+  let tasks = [
+    {
+      id: 'task-a',
+      project_id: 'project-a',
+      title: 'First task',
+      description: '',
+      column: 'todo',
+      position: 0,
+      origin: 'user',
+    },
+    {
+      id: 'task-b',
+      project_id: 'project-a',
+      title: 'Second task',
+      description: 'Discovered work',
+      column: 'todo',
+      position: 1,
+      origin: 'agent',
+    },
+  ];
+  await page.route('**/api/v1/projects/project-a/tasks', async (route) => {
+    if (route.request().method() === 'POST') {
+      const mutation = route.request().postDataJSON()[0];
+      const task = tasks.find((t) => t.id === mutation.id)!;
+      const others = tasks.filter((t) => t.id !== task.id);
+      const column = mutation.column;
+      const ordered = others
+        .filter((t) => t.column === column)
+        .sort((a, b) => a.position - b.position);
+      ordered.splice(mutation.position, 0, { ...task, column });
+      tasks = [
+        ...others.filter((t) => t.column !== column),
+        ...ordered.map((t, i) => ({ ...t, position: i })),
+      ];
+    }
+    await route.fulfill({ json: tasks });
+  });
+  await page.goto('/projects/project-a');
+  await page.getByRole('button', { name: 'Kanban', exact: true }).click();
+  await expect(page.locator('.ai-tag')).toHaveCount(1);
+  await page
+    .locator('.task-card')
+    .filter({ hasText: 'Second task' })
+    .dragTo(page.locator('.task-card').filter({ hasText: 'First task' }), {
+      targetPosition: { x: 20, y: 2 },
+    });
+  await expect(page.locator('.kanban-column').nth(1).locator('.task-card').first()).toContainText(
+    'Second task',
+  );
+  await page
+    .locator('.task-card')
+    .filter({ hasText: 'First task' })
+    .dragTo(page.locator('.kanban-column').nth(3));
+  await expect(page.locator('.kanban-column').nth(3)).toContainText('First task');
+  await page.screenshot({ path: 'test-results/kanban.png', fullPage: true });
+  expect(tasks.find((t) => t.id === 'task-a')?.column).toBe('done');
+  expect(errors).toEqual([]);
+});
+
+test('Activity uses structured commands and filters persisted and live projects', async ({
+  page,
+}) => {
+  const { errors } = await fixture(page);
+  const report = {
+    status: 'blocked',
+    summary: 'README committed locally; publishing needs Contents write.',
+    completed: ['Updated README'],
+    remaining: ['Publish the branch'],
+    blockers: ['GitHub denied push'],
+  };
+  const executions = [
+    { id: 'exec-a', project_id: 'project-a', project_name: 'Package telescope', status: 'running' },
+    { id: 'exec-b', project_id: 'project-b', project_name: 'Build a todo app', status: 'running' },
+  ];
+  await page.route('**/api/v1/runs/run-1234', (route) =>
+    route.fulfill({
+      json: {
+        id: 'run-1234',
+        status: 'running',
+        created_at: stamp,
+        parallel: true,
+        stop_conditions: [],
+        executions,
+      },
+    }),
+  );
+  await page.route('**/api/v1/runs/run-1234/events', (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: 21,
+          run_id: 'run-1234',
+          project_id: 'project-a',
+          execution_id: 'exec-a',
+          type: 'execution.log',
+          timestamp: stamp,
+          message: JSON.stringify({
+            type: 'commandExecution',
+            command: 'git push origin docs/readme',
+            cwd: '/workspace',
+            status: 'failed',
+            exitCode: 1,
+            durationMs: 977,
+            aggregatedOutput: 'GitHub rejected push (HTTP 403)',
+          }),
+        },
+        {
+          id: 22,
+          run_id: 'run-1234',
+          project_id: 'project-a',
+          execution_id: 'exec-a',
+          type: 'execution.log',
+          timestamp: stamp,
+          message: JSON.stringify({
+            type: 'agentMessage',
+            phase: 'final_answer',
+            text: JSON.stringify(report),
+          }),
+        },
+        {
+          id: 23,
+          run_id: 'run-1234',
+          project_id: 'project-a',
+          execution_id: 'exec-a',
+          type: 'execution.log',
+          timestamp: stamp,
+          message: JSON.stringify({
+            type: 'userMessage',
+            content: [{ text: 'Continue autonomous work' }],
+          }),
+        },
+      ],
+    }),
+  );
+  await page.route('**/api/v1/events', (route) =>
+    route.fulfill({
+      contentType: 'text/event-stream',
+      body: `id: 24\ndata: ${JSON.stringify({ id: 24, run_id: 'run-1234', project_id: 'project-b', execution_id: 'exec-b', type: 'agent.progress', message: 'Building the utility', timestamp: stamp })}\n\n`,
+    }),
+  );
+  await page.goto('/runs/run-1234');
+  await page.getByRole('button', { name: 'Activity' }).click();
+  await expect(page.getByRole('log')).toContainText('Command failed');
+  await expect(page.getByRole('log')).toContainText(report.summary);
+  await expect(page.getByRole('log')).toContainText('Building the utility');
+  await expect(page.getByRole('log')).not.toContainText('Continue autonomous work');
+  await page.getByRole('combobox', { name: 'Project', exact: true }).selectOption('project-b');
+  await expect(page.getByRole('log')).not.toContainText('git push');
+  await expect(page.getByRole('log')).toContainText('Building the utility');
+  await page.getByRole('combobox', { name: 'Project', exact: true }).selectOption('project-a');
+  await expect(page.getByRole('log')).not.toContainText('Building the utility');
+  await page.getByText('Show full output', { exact: true }).click();
+  await expect(page.getByRole('log')).toContainText('GitHub rejected push (HTTP 403)');
+  await page.screenshot({ path: 'test-results/activity.png', fullPage: true });
   expect(errors).toEqual([]);
 });

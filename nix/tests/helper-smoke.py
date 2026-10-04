@@ -6,6 +6,7 @@ import json
 import socket
 import struct
 import subprocess
+import tarfile
 import time
 from pathlib import Path
 from typing import Any
@@ -80,7 +81,7 @@ class Guest:
             "credentials_set",
             {
                 "openai": {
-                    "mode": "siwc",
+                    "mode": "chatgpt",
                     "access_token": "test-token-no-real-provider",
                     "expires_at": time.time() + 3600,
                 }
@@ -198,6 +199,12 @@ def main() -> None:
         guest.shutdown()
         helper("stop", {"execution_id": first["execution_id"]})
         handles.remove(first)
+        exported = helper("workspace_export", {"project_id": first_project})
+        archive_path = Path("/var/lib/tokendrain/exports") / (exported["export_id"] + ".tar.gz")
+        with tarfile.open(archive_path) as archive:
+            sentinel = archive.extractfile("sentinel")
+            assert sentinel and sentinel.read() == b"workspace"
+        archive_path.unlink()
         final, guest = boot(first_project)
         handles.append(final)
         assert guest.command("cat /workspace/sentinel /root/sentinel") == "workspaceenvironment"

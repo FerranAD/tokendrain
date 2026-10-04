@@ -1,6 +1,6 @@
 # MicroVMs and project storage
 
-Tokendrain boots a fresh Firecracker VM for each project execution. The machine is disposable; the two project disks are durable. Creating a project, running it, taking snapshots, or changing its task log never requires `nixos-rebuild`.
+Tokendrain boots a fresh Firecracker VM for each project execution. The machine is disposable; the two project disks are durable. Creating a project, running it, taking snapshots, or changing its Kanban board never requires `nixos-rebuild`.
 
 ## Immutable platform, persistent development state
 

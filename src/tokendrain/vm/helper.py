@@ -18,9 +18,10 @@ import signal
 import socket
 import stat
 import struct
+import sys
 from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -54,7 +55,7 @@ class Request(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: Literal[1]
     id: str = Field(max_length=64)
-    operation: Literal["start", "stop", "list", "diagnostics"]
+    operation: Literal["start", "stop", "list", "diagnostics", "workspace_export"]
     payload: dict[str, Any]
 
     @model_validator(mode="after")
@@ -354,6 +355,65 @@ class InfrastructureService:
             await durable_io(shutil.rmtree, base)
         logger.info("vm_stopped", extra={"execution_id": key, "forced": forced})
 
+    async def export_workspace(self, project_id: str) -> dict[str, str]:
+        """Pin both image and output descriptors before entering the worker namespace."""
+        disk_fd = self._open_disk(project_id, "workspace")
+        state_fd: int | None = None
+        directory_fd: int | None = None
+        output_fd: int | None = None
+        process: asyncio.subprocess.Process | None = None
+        export_id = uuid4().hex
+        name = export_id + ".tar.gz"
+        try:
+            state_fd = os.open(self.config.state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.mkdir("exports", mode=0o700, dir_fd=state_fd)
+            except FileExistsError:
+                pass
+            directory_fd = os.open(
+                "exports", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=state_fd
+            )
+            os.fchown(directory_fd, self.daemon_uid, self.vm_gid)
+            os.fchmod(directory_fd, 0o700)
+            output_fd = os.open(
+                name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+            os.fchown(output_fd, self.daemon_uid, self.vm_gid)
+            process = await asyncio.create_subprocess_exec(
+                "unshare",
+                "--mount",
+                "--propagation",
+                "private",
+                sys.executable,
+                "-m",
+                "tokendrain.storage.export",
+                str(disk_fd),
+                str(output_fd),
+                pass_fds=(disk_fd, output_fd),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            async with asyncio.timeout(120):
+                await process.wait()
+            if process.returncode:
+                raise RuntimeError("Read-only workspace export failed; inspect helper setup")
+            os.fsync(output_fd)
+            return {"export_id": export_id}
+        except BaseException:
+            if process and process.returncode is None:
+                process.kill()
+                await process.wait()
+            if directory_fd is not None and output_fd is not None:
+                os.unlink(name, dir_fd=directory_fd)
+            raise
+        finally:
+            for descriptor in (output_fd, directory_fd, state_fd, disk_fd):
+                if descriptor is not None:
+                    os.close(descriptor)
+
     async def dispatch(self, request: Request) -> object:
         if request.operation == "diagnostics":
             # These probes neither create nor reconcile resources, and need not
@@ -368,6 +428,15 @@ class InfrastructureService:
             )
             return [check.model_dump(mode="json") for check in checks]
         async with self._lock:
+            if request.operation == "workspace_export":
+                if set(request.payload) != {"project_id"}:
+                    raise ValueError("workspace_export accepts only project_id")
+                project_id = str(UUID(str(request.payload["project_id"])))
+                if any(
+                    str(UUID(record.spec.project_id)) == project_id for record in self.records()
+                ):
+                    raise ValueError("Stop the project before downloading its workspace")
+                return await self.export_workspace(project_id)
             if request.operation == "start":
                 return (await self.start(VmSpec.model_validate(request.payload))).model_dump(
                     mode="json"

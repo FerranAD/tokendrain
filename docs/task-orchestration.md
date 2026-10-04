@@ -12,7 +12,7 @@ Codex transport and credential providers without using external accounts.
   never becomes successful completion.
 - The initial prompt includes the previous report and durable project state.
   Feedback is consumed only after a useful turn returns. Concurrent user edits
-  to the task log win over agent reports.
+  to Backlog approval remain enforced in host task mutations.
 - Reports use an explicit strict Structured Outputs schema with all fields
   required and no arbitrary metadata dictionaries. Usage observations remain
   host-owned. Malformed agent output is retained as an uncertain in-progress

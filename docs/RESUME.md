@@ -79,16 +79,10 @@ read-only, hence XDG_CACHE_HOME in /tmp. Nix network/build access works.
    race with external mutation needs careful atomic coordination. Secrets metadata in
    SQLite, values in EncryptedFileCredentialStore; dotenv parser rejects malformed
    lines and does not interpolate. Secret env variable restrictions need align guest.
-4. OpenAI callback `/auth/callback` on **http://127.0.0.1:<port>** per current official
-   SIWC. `begin_sign_in` returns url/state; callback calls complete_sign_in with
-   provider code/state/issued client_id. Remote browser must SSH-tunnel callback.
-   No invented OAuth behavior. API auth method UI wants chatgpt/import; backend
-   AccountInfo method siwc/import. Account list metadata stored encrypted in files.
-5. Models + current usage discovery before run: fetch official SIWC model endpoint
-   or start host-side app-server in fresh tmpfs with runtime credentials, no agent
-   turns on host. Imported Codex mode supports account/rateLimits/read. SIWC custom
-   provider may not: fail closed on unobservable percentage predicates and explain
-   duration/provider-limit fallback. Never fake zero usage.
+4. OpenAI/Codex supports auth.json import only; SIWC and callbacks are retired.
+   Imported credentials refresh through host Codex in tmpfs.
+5. Models and usage discovery use a host app-server without inference turns.
+   Percentage rules fail closed when no matching observation is available.
 6. Mock infrastructure/session injectable backend for full app tests and local
    demo mode (must clearly label mock). Real Firecracker backend already exists.
 7. Host unit/integration tests: migrations forward/idempotent/schema parity, API CRUD,

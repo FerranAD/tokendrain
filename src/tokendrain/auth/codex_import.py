@@ -12,11 +12,17 @@ import time
 from pathlib import Path
 from typing import Any
 
+import jwt
+
 from tokendrain.codex.client import CodexClient
 
 
 def decode_import(raw: bytes) -> dict[str, Any]:
-    from .openai import _unverified_claims
+    def _unverified_claims(token: str) -> dict[str, Any]:
+        try:
+            return dict(jwt.decode(token, options={"verify_signature": False}))
+        except jwt.PyJWTError:
+            return {}
 
     if len(raw) > 1024 * 1024:
         raise ValueError("auth.json exceeds 1 MiB")

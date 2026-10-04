@@ -21,7 +21,6 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
-    task_log: Mapped[str] = mapped_column(Text, default="")
     next_run_feedback: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -41,6 +40,7 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    threshold_mode: Mapped[str] = mapped_column(String(16), default="graceful")
     parallel: Mapped[bool] = mapped_column(Boolean, default=True)
     stop_conditions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -62,6 +62,10 @@ class ProjectExecution(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     thread_id: Mapped[str | None] = mapped_column(String(200))
+    termination_reason: Mapped[str | None] = mapped_column(String(40))
+    termination_detail: Mapped[str | None] = mapped_column(Text)
+    threshold_mode: Mapped[str | None] = mapped_column(String(16))
+    interrupted: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text)
     vm_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     __table_args__ = (
@@ -120,6 +124,21 @@ class Event(Base):
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class ProjectTask(Base):
+    __tablename__ = "project_tasks"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(300))
+    description: Mapped[str] = mapped_column(Text, default="")
+    column: Mapped[str] = mapped_column(String(24), default="todo")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    origin: Mapped[str] = mapped_column(String(16), default="user")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class ProjectSnapshot(Base):
     __tablename__ = "project_snapshots"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -127,6 +146,7 @@ class ProjectSnapshot(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(200))
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     environment_bytes: Mapped[int] = mapped_column(Integer, default=0)
     workspace_bytes: Mapped[int] = mapped_column(Integer, default=0)

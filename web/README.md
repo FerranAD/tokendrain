@@ -1,6 +1,6 @@
 # tokendrain web application
 
-A React and TypeScript application served by `tokendraind`. It includes project management, persistent task logs and feedback, run preparation and reports, live events, recurring schedules, account connections, GitHub repository permissions, secret bundles, and environment/snapshot controls.
+A React and TypeScript application served by `tokendraind`. It includes project management, persistent Kanban tasks and feedback, run preparation and reports, structured activity and raw events, recurring schedules, account connections, GitHub repository permissions, secret bundles, and environment/snapshot controls.
 
 The application always uses `/api/v1`. There is no demonstration backend or embedded sample project data. [API.md](API.md) describes the HTTP contract.
 

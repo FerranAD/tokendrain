@@ -12,7 +12,7 @@ Control-plane access grants authority to configure projects, allocate resources,
 
 ## Isolation
 
-The web daemon runs as `tokendrain` without Linux capabilities and keeps systemd's `PrivateDevices` isolation. A separate privileged helper exposes only VM start, stop, list, and read-only diagnostics operations over a local Unix socket. It verifies peer credentials and accepts validated project/execution UUIDs plus bounded resource values. Requests cannot supply arbitrary host commands, filenames, mounts, or Firecracker configurations.
+The web daemon runs as `tokendrain` without Linux capabilities and keeps systemd's `PrivateDevices` isolation. A separate privileged helper exposes only VM start, stop, list, read-only diagnostics, and project workspace export operations over a local Unix socket. It verifies peer credentials and accepts validated project/execution UUIDs plus bounded resource values. Requests cannot supply arbitrary host commands, filenames, mounts, or Firecracker configurations.
 
 System status checks application prerequisites in the daemon's own environment and obtains VM prerequisites through the helper's authenticated diagnostics operation. That operation inspects fixed resources; callers cannot select paths or commands. An unavailable helper is a failed check. KVM/TUN visibility and privileged networking executables are not requirements of the web daemon, and diagnostics do not grant it additional device access or capabilities.
 
@@ -57,7 +57,7 @@ Git credentials use a runtime helper restricted to HTTPS `github.com`; tokens ar
 
 The default listener is `127.0.0.1:8742`. Use an SSH tunnel for administration or a trusted HTTPS reverse proxy with the configured `web.publicUrl`. Do not expose the daemon as an unauthenticated network service.
 
-The administration token is generated in the state directory with mode 0600. It creates signed, expiring HttpOnly browser sessions; API access also uses owner-level authentication. The browser does not keep it in localStorage/sessionStorage. Mutation requests require the application request header and origin checks. Agent reports and logs are displayed as text, not executed as HTML.
+The administrator supplies a runtime token file in token mode; Tokendrain never generates one. Auth-none mode omits session authentication while retaining Host/Origin/request-header checks. It creates signed, expiring HttpOnly browser sessions; API access also uses owner-level authentication. The browser does not keep it in localStorage/sessionStorage. Mutation requests require the application request header and origin checks. Agent reports and logs are displayed as text, not executed as HTML.
 
 OpenAI's callback is intentionally separate from the ordinary admin session: PKCE, state, nonce, and identity validation protect that provider flow. GitHub's setup callback only redirects to Settings and trusts no installation query parameters. An authenticated, origin-checked refresh then discovers installations using the configured App credentials. See [OpenAI authentication](openai-auth.md) for loopback forwarding.
 

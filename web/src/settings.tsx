@@ -20,9 +20,8 @@ export function SettingsPage() {
 
 function OpenAISettings() {
   const status = useResource<OpenAIStatus>('/auth/openai');
-  const [loginUrl, setLoginUrl] = useState('');
   const [authJson, setAuthJson] = useState('');
-  const [importing, setImporting] = useState(false);
+  const [importing, setImporting] = useState(true);
   const action = useAction();
   return (
     <section className="panel" id="openai">
@@ -31,9 +30,17 @@ function OpenAISettings() {
           <div className="eyebrow">Agent connection</div>
           <h2>OpenAI / Codex</h2>
         </div>
-        <Badge status={status.data?.connected ? 'connected' : 'disconnected'} />
+        <Badge
+          status={
+            status.data?.connected
+              ? status.data.valid === false
+                ? 'invalid'
+                : 'connected'
+              : 'disconnected'
+          }
+        />
       </div>
-      <ErrorNotice error={status.error} />
+      <ErrorNotice error={status.error || status.data?.credential_error} />
       <p className="muted">
         Connect your ChatGPT account so Codex can use your available allowance. Long-lived
         credentials stay encrypted on this host. Project VMs receive temporary access tokens.
@@ -41,37 +48,13 @@ function OpenAISettings() {
       {status.data?.connected && (
         <div className="callout">
           <strong>{status.data.account_label || 'Account connected'}</strong>
-          <p className="small">
-            Method:{' '}
-            {status.data.method === 'import'
-              ? 'Imported Codex credentials'
-              : 'Sign in with ChatGPT'}
-          </p>
+          <p className="small">Imported Codex credentials · renewed automatically through Codex</p>
         </div>
       )}
       <div className="row wrap">
-        <button
-          className="primary"
-          disabled={action.busy}
-          onClick={() => {
-            void action.run(async () => {
-              const login = await mutate<{ id: string; url: string }>(
-                '/auth/openai/login',
-                'POST',
-                {},
-              );
-              setLoginUrl(login.url);
-            }, 'Sign-in started. Open the secure sign-in link to continue.');
-          }}
-        >
-          {action.busy
-            ? 'Starting…'
-            : status.data?.connected
-              ? 'Reconnect with ChatGPT'
-              : 'Sign in with ChatGPT'}{' '}
-          <span aria-hidden="true">↗</span>
+        <button onClick={() => setImporting((value) => !value)}>
+          {status.data?.connected ? 'Replace Codex auth.json' : 'Import Codex auth.json'}
         </button>
-        <button onClick={() => setImporting((value) => !value)}>Import Codex auth.json</button>
         {status.data?.connected && (
           <button
             className="quiet danger"
@@ -85,32 +68,6 @@ function OpenAISettings() {
           </button>
         )}
       </div>
-      {(loginUrl || status.data?.login?.url) && (
-        <div className="callout top-space">
-          <a
-            className="button"
-            href={loginUrl || status.data?.login?.url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Continue to secure sign-in ↗
-          </a>
-          <p className="small muted">
-            Complete the provider’s flow, then return here. For a remote host, forward the
-            configured callback port before opening the sign-in link. With default settings:{' '}
-            <code>ssh -N -L 8742:127.0.0.1:8742 user@your-host</code>. Open tokendrain at{' '}
-            <code>http://127.0.0.1:8742</code> in the browser on your computer so the loopback
-            callback reaches the daemon.
-          </p>
-          <button className="quiet" onClick={status.reload}>
-            Check connection
-          </button>
-          {status.data?.login?.status && (
-            <span className="small muted">{status.data.login.status}</span>
-          )}
-        </div>
-      )}
-      <ErrorNotice error={status.data?.login?.error} />
       {importing && (
         <form
           className="inset top-space"
@@ -131,7 +88,7 @@ function OpenAISettings() {
             }, 'Codex credentials imported.');
           }}
         >
-          <h3>Advanced compatibility import</h3>
+          <h3>Import Codex auth.json</h3>
           <p className="small muted">
             Import an existing Codex auth.json. The host interprets and stores it centrally; it is
             never copied onto project disks.
@@ -539,6 +496,7 @@ export function ProjectGitHubPanel({ id }: { id: string }) {
   const integration = useResource<ProjectGitHub | null>(`/projects/${id}/github`);
   const [installationId, setInstallationId] = useState('');
   const [repositoryId, setRepositoryId] = useState('');
+  const [repositoryQuery, setRepositoryQuery] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<Record<string, string>>({ contents: 'read' });
   const [initialized, setInitialized] = useState(false);
   const repositories = useResource<Repository[]>(
@@ -581,8 +539,7 @@ export function ProjectGitHubPanel({ id }: { id: string }) {
               const repository = repositories.data?.find(
                 (item) => String(item.id) === repositoryId,
               );
-              if (!repository && !integration.data?.repository_name)
-                throw new Error('Choose an available repository.');
+              if (!repository) throw new Error('Choose an available repository.');
               return mutate(`/projects/${id}/github`, 'PUT', {
                 installation_id: installationId,
                 repository_id: Number(repositoryId),
@@ -603,6 +560,7 @@ export function ProjectGitHubPanel({ id }: { id: string }) {
                 onChange={(e) => {
                   setInstallationId(e.target.value);
                   setRepositoryId('');
+                  setRepositoryQuery('');
                   setPermissions({ contents: 'read' });
                 }}
               >
@@ -616,22 +574,33 @@ export function ProjectGitHubPanel({ id }: { id: string }) {
             </label>
             <label>
               Repository
-              <select
-                required
+              <input
+                role="combobox"
+                aria-autocomplete="list"
+                list="github-repositories"
                 disabled={!installationId || repositories.loading}
-                value={repositoryId}
-                onChange={(e) => setRepositoryId(e.target.value)}
-              >
-                <option value="">
-                  {repositories.loading ? 'Loading repositories…' : 'Select a repository'}
-                </option>
-                {repositories.data?.map((repository) => (
-                  <option key={repository.id} value={repository.id}>
-                    {repository.full_name}
-                    {repository.private ? ' (private)' : ''}
-                  </option>
+                value={
+                  (repositoryQuery ??
+                    repositories.data?.find((r) => String(r.id) === repositoryId)?.full_name ??
+                    integration.data?.repository_name) ||
+                  ''
+                }
+                placeholder="Search repositories…"
+                required
+                onChange={(e) => {
+                  setRepositoryQuery(e.target.value);
+                  setRepositoryId(
+                    String(
+                      repositories.data?.find((r) => r.full_name === e.target.value)?.id || '',
+                    ),
+                  );
+                }}
+              />
+              <datalist id="github-repositories">
+                {repositories.data?.map((r) => (
+                  <option key={r.id} value={r.full_name} />
                 ))}
-              </select>
+              </datalist>
             </label>
           </div>
           <ErrorNotice error={repositories.error} />
@@ -669,6 +638,12 @@ export function ProjectGitHubPanel({ id }: { id: string }) {
               );
             })}
           </div>
+          {permissions.pull_requests === 'write' && permissions.contents !== 'write' && (
+            <div className="notice warning" role="alert">
+              This project can create pull requests, but it has nowhere to publish the source
+              branch. Give the target repository Contents write access.
+            </div>
+          )}
           <ActionNotice {...action} />
           <div className="form-actions">
             {integration.data && (

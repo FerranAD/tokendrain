@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     state_dir: Path = Path("/var/lib/tokendrain")
     master_key_file: Path | None = None
     admin_token_file: Path | None = None
+    auth_mode: Literal["token", "none"] = "token"
     listen_address: str = "127.0.0.1"
     port: int = Field(default=8742, ge=1, le=65535)
     public_url: str = "http://127.0.0.1:8742"
@@ -29,8 +30,6 @@ class Settings(BaseSettings):
     shutdown_timeout_seconds: int = Field(default=60, ge=1)
     scheduler_interval_seconds: float = Field(default=10, ge=0.1)
     usage_poll_seconds: float = Field(default=30, ge=1)
-    # This is the controller callback required by SIWC, not the UI's reverse proxy URL.
-    openai_redirect_uri: str = "http://127.0.0.1:8742/auth/callback"
 
     @property
     def database_path(self) -> Path:

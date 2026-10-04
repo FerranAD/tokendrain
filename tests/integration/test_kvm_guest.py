@@ -129,7 +129,7 @@ async def start_codex(guest: GuestClient) -> None:
     await guest.credentials_set(
         {
             "openai": {
-                "mode": "siwc",
+                "mode": "chatgpt",
                 "access_token": "test-only-no-network",
                 "expires_at": time.time() + 3600,
             }

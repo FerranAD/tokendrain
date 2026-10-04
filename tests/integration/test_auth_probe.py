@@ -18,49 +18,6 @@ from tokendrain.credentials import EncryptedFileCredentialStore
 HOST_ID = "urn:uuid:12345678-1234-4234-9234-123456789abc"
 
 
-async def test_siwc_probe_uses_account_catalog_and_explicit_unavailable_usage(
-    tmp_path: Path,
-) -> None:
-    store = EncryptedFileCredentialStore(tmp_path / "credentials", secrets.token_bytes(32))
-    record = AccountRecord(
-        id="account",
-        method="siwc",
-        subject="user",
-        expires_at=time.time() + 3600,
-        access_token="only-runtime-access",
-        scopes=["chatgpt.tokens.use.direct"],
-    )
-    await store.put("openai-account", record.model_dump_json().encode())
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "https://api.openai.com/v1/models"
-        assert request.headers["authorization"] == "Bearer only-runtime-access"
-        return httpx.Response(
-            200,
-            json={
-                "models": [
-                    {
-                        "slug": "visible-model",
-                        "display_name": "Visible",
-                        "visibility": "list",
-                        "supported_reasoning_levels": [{"effort": "medium"}],
-                        "default_reasoning_level": "medium",
-                    },
-                    {"slug": "hidden-model", "display_name": "Hidden", "visibility": "hide"},
-                ]
-            },
-        )
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        probe = AuthProbe(OpenAIAuthManager(store, http, HOST_ID), http, tmp_path / "runtime")
-        result = await probe.read()
-        assert [model.id for model in result.models] == ["visible-model"]
-        assert result.models[0].supported_reasoning_efforts == ["medium"]
-        assert result.usage == {} and result.usage_error
-        assert not (tmp_path / "runtime").exists()
-        assert "only-runtime-access" not in result.model_dump_json()
-
-
 async def test_import_probe_never_starts_thread_and_cleans_isolated_home(tmp_path: Path) -> None:
     # The fake subprocess rejects any unexpected API, particularly inference.
     executable = tmp_path / "fake-codex"
@@ -112,7 +69,7 @@ for line in sys.stdin:
     await store.put("openai-account", record.model_dump_json().encode())
     async with httpx.AsyncClient() as http:
         result = await AuthProbe(
-            OpenAIAuthManager(store, http, HOST_ID), http, tmp_path / "runtime", str(executable)
+            OpenAIAuthManager(store, http), http, tmp_path / "runtime", str(executable)
         ).read()
     assert result.models[0].id == "model"
     assert result.usage["rateLimits"]["primary"]["usedPercent"] == 12

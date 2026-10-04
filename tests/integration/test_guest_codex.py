@@ -45,7 +45,7 @@ for line in sys.stdin:
         print(json.dumps(notification), flush=True)
     elif method == "environment/read":
         result = {"github":os.environ.get("GH_TOKEN"),
-                  "access":os.environ.get("ACCESS_TOKEN"),
+                  "access":None,
                   "secret":os.environ.get("EXAMPLE_SECRET")}
     print(json.dumps({"id":request["id"], "result":result}), flush=True)
 """
@@ -55,7 +55,7 @@ for line in sys.stdin:
 
 
 def runtime(token: str) -> dict[str, object]:
-    return {"mode": "siwc", "access_token": token, "expires_at": time.time() + 3600}
+    return {"mode": "chatgpt", "access_token": token, "expires_at": time.time() + 3600}
 
 
 async def test_guest_process_rotation_resumes_without_replaying_turn(
@@ -95,7 +95,7 @@ async def test_guest_process_rotation_resumes_without_replaying_turn(
         assert (tmp_path / "persist" / "thread").read_text() == thread_id
         environment = await guest.handle("codex_rpc_request", {"method": "environment/read"})
         assert environment == {
-            "access": "second-token",
+            "access": None,
             "github": "github-one",
             "secret": "runtime-only",
         }

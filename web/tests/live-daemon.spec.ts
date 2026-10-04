@@ -31,7 +31,7 @@ test('live daemon: persistent project, secrets, disks, run report, schedule, and
   let runId: string | undefined;
   try {
     await page.goto(base);
-    await expect(page.getByRole('heading', { name: 'Your work, moving forward.' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Usage & runs' })).toBeVisible();
     await page.getByRole('button', { name: 'New project' }).click();
     await page.getByLabel('Project name', { exact: true }).fill(name);
     await page
@@ -41,12 +41,11 @@ test('live daemon: persistent project, secrets, disks, run report, schedule, and
     await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+$/);
     projectId = new URL(page.url()).pathname.split('/').at(-1)!;
 
-    await page.getByRole('button', { name: 'Tasks', exact: true }).click();
-    await page
-      .getByRole('textbox', { name: 'Shared task log' })
-      .fill('- [x] Create persistent project\n- [ ] Verify run report');
-    await page.getByRole('button', { name: 'Save changes' }).click();
-    await expect(page.getByRole('status')).toContainText('Changes saved');
+    await page.getByRole('button', { name: 'Kanban', exact: true }).click();
+    await page.getByRole('button', { name: 'Add task', exact: false }).first().click();
+    await page.getByLabel('Title', { exact: true }).fill('Verify run checkpoint');
+    await page.getByRole('button', { name: 'Save task' }).click();
+    await expect(page.locator('.task-card')).toContainText('Verify run checkpoint');
     await page.getByRole('button', { name: 'Next run feedback', exact: true }).click();
     await page
       .getByRole('textbox', { name: 'Feedback for the next run' })
@@ -89,9 +88,9 @@ test('live daemon: persistent project, secrets, disks, run report, schedule, and
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]+$/);
     runId = new URL(page.url()).pathname.split('/').at(-1)!;
     await expect(page.locator('.page-heading .status-blocked')).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole('heading', { name: 'Run report' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Last agent checkpoint' })).toBeVisible();
     await expect(page.locator('.report')).toContainText(/simulation|simulated|mock/i);
-    await page.getByRole('button', { name: 'Live events' }).click();
+    await page.getByRole('button', { name: 'Activity' }).click();
     await expect(page.locator('.log-row').first()).toBeVisible();
     await page.screenshot({ path: 'test-results/live-daemon-run.png', fullPage: true });
 

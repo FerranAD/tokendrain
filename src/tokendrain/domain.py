@@ -22,6 +22,7 @@ class ExecutionState(StrEnum):
     BLOCKED = "blocked"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    STOPPED = "stopped"
 
 
 TERMINAL = frozenset(
@@ -30,12 +31,14 @@ TERMINAL = frozenset(
         ExecutionState.BLOCKED,
         ExecutionState.FAILED,
         ExecutionState.CANCELLED,
+        ExecutionState.STOPPED,
     }
 )
 TRANSITIONS = {
     ExecutionState.QUEUED: {
         ExecutionState.PREPARING,
         ExecutionState.CANCELLED,
+        ExecutionState.STOPPED,
         ExecutionState.FAILED,
     },
     ExecutionState.PREPARING: {ExecutionState.STARTING_VM, ExecutionState.STOPPING},
@@ -58,6 +61,7 @@ class RunState(StrEnum):
     BLOCKED = "blocked"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    STOPPED = "stopped"
 
 
 class Boundary(BaseModel):
@@ -120,6 +124,7 @@ class RunTemplate(Boundary):
     projects: list[ProjectConfig] = Field(min_length=1, max_length=64)
     stop_conditions: list[StopCondition] = Field(default_factory=default_stop_conditions)
     parallel: bool = True
+    threshold_mode: Literal["graceful", "hard"] = "graceful"
 
     @field_validator("projects")
     @classmethod
@@ -129,9 +134,27 @@ class RunTemplate(Boundary):
         return value
 
 
+TaskColumn = Literal["backlog", "todo", "in_progress", "done"]
+
+
+class TaskInput(Boundary):
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=100_000)
+    column: TaskColumn = "todo"
+
+
+class TaskMutation(Boundary):
+    id: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=100_000)
+    column: TaskColumn | None = None
+    position: int | None = Field(default=None, ge=0)
+
+
 class ProjectCreate(Boundary):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=100_000)
+    initial_tasks: list[TaskInput] = Field(default_factory=list, max_length=500)
     default_model: str = Field(default="", max_length=200)
     default_reasoning_effort: Reasoning = "medium"
 
@@ -139,7 +162,6 @@ class ProjectCreate(Boundary):
 class ProjectPatch(Boundary):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=100_000)
-    task_log: str | None = Field(default=None, max_length=500_000)
     next_run_feedback: str | None = Field(default=None, max_length=100_000)
     default_model: str | None = Field(default=None, max_length=200)
     default_reasoning_effort: Reasoning | None = None
@@ -191,8 +213,16 @@ class RunReport(Boundary):
     blockers: list[str] = Field(default_factory=list)
     changes: Changes = Field(default_factory=Changes)
     suggested_next_action: str = ""
-    task_log: str = ""
+    task_updates: list[TaskMutation] = Field(default_factory=list, max_length=500)
     usage: ReportUsage = Field(default_factory=ReportUsage)
+
+
+def usage_window_name(window: UsageWindow) -> str:
+    if window.window_minutes == 300:
+        return "5-hour"
+    if window.window_minutes == 10080:
+        return "Weekly"
+    return window.name or window.limit_id
 
 
 def stop_reason(
@@ -218,5 +248,9 @@ def stop_reason(
                 if condition.window_minutes and window.window_minutes != condition.window_minutes:
                     continue
                 if window.used_percent >= condition.used_percent:
-                    return f"{window.name or window.limit_id} reached {window.used_percent:g}%"
+                    return (
+                        f"{usage_window_name(window)} usage reached the configured "
+                        f"{condition.used_percent:g}% threshold "
+                        f"(observed {window.used_percent:g}%)"
+                    )
     return None

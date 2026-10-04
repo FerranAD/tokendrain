@@ -1,22 +1,7 @@
-from pathlib import Path
-from uuid import UUID
-
 import pytest
 
 from tokendrain.secrets import parse_dotenv
-from tokendrain.security import SessionTokens, stable_host_id
-
-
-def test_host_id_is_supported_stable_uuid_uri(tmp_path: Path) -> None:
-    path = tmp_path / "host-id"
-    value = stable_host_id(path)
-    assert value.startswith("urn:uuid:")
-    assert UUID(value[9:]).version == 4
-    assert stable_host_id(path) == value
-    assert path.stat().st_mode & 0o777 == 0o600
-    path.write_text("not-supported")
-    with pytest.raises(ValueError, match="supported SIWC"):
-        stable_host_id(path)
+from tokendrain.security import SessionTokens
 
 
 def test_session_auth_and_tamper() -> None:

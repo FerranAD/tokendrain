@@ -1,3 +1,5 @@
+import { Kanban } from './kanban';
+import { ModelSelector } from './model-selector';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { mutate, useAction, useResource } from './api';
@@ -13,6 +15,7 @@ import {
   Loading,
   PageTitle,
   ReportView,
+  ExecutionOutcome,
   shortId,
   useNavigation,
 } from './ui';
@@ -37,7 +40,7 @@ export function ProjectCards({ projects }: { projects: Project[] }) {
           </div>
           <h3>{project.name}</h3>
           <p className="project-description">{project.description || 'No description yet.'}</p>
-          <TaskProgress taskLog={project.task_log} />
+
           <div className="project-footer">
             <span>{project.default_model || 'Provider default model'}</span>
             <span>
@@ -47,17 +50,6 @@ export function ProjectCards({ projects }: { projects: Project[] }) {
         </Link>
       ))}
     </div>
-  );
-}
-
-function TaskProgress({ taskLog }: { taskLog: string }) {
-  const tasks = [...taskLog.matchAll(/^\s*[-*]\s+\[([ xX])\]/gm)];
-  if (!tasks.length) return null;
-  const completed = tasks.filter((task) => task[1].toLowerCase() === 'x').length;
-  return (
-    <p className="tiny muted top-space">
-      {completed} / {tasks.length} tasks checked off
-    </p>
   );
 }
 
@@ -86,12 +78,19 @@ export function ProjectsPage() {
 export function NewProject({ close }: { close: () => void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [initialTasks, setInitialTasks] = useState<
+    { title: string; description: string; column: string }[]
+  >([]);
   const action = useAction();
   const { go } = useNavigation();
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void action.run(async () => {
-      const project = await mutate<Project>('/projects', 'POST', { name, description });
+      const project = await mutate<Project>('/projects', 'POST', {
+        name,
+        description,
+        initial_tasks: initialTasks.filter((t) => t.title.trim()),
+      });
       go(`/projects/${project.id}`);
     });
   };
@@ -125,6 +124,66 @@ export function NewProject({ close }: { close: () => void }) {
             placeholder="Describe the goal, success criteria, and any constraints…"
           />
         </label>
+        <fieldset className="initial-tasks">
+          <legend>Initial tasks</legend>
+          {initialTasks.map((task, i) => (
+            <div className="inset" key={i}>
+              <div className="row">
+                <input
+                  aria-label={`Task ${i + 1} title`}
+                  placeholder="Task title"
+                  required
+                  value={task.title}
+                  onChange={(e) =>
+                    setInitialTasks(
+                      initialTasks.map((t, j) => (j === i ? { ...t, title: e.target.value } : t)),
+                    )
+                  }
+                />
+                <select
+                  aria-label={`Task ${i + 1} column`}
+                  value={task.column}
+                  onChange={(e) =>
+                    setInitialTasks(
+                      initialTasks.map((t, j) => (j === i ? { ...t, column: e.target.value } : t)),
+                    )
+                  }
+                >
+                  <option value="todo">Todo — approved</option>
+                  <option value="backlog">Backlog — review later</option>
+                </select>
+                <button
+                  type="button"
+                  aria-label="Remove initial task"
+                  onClick={() => setInitialTasks(initialTasks.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </div>
+              <textarea
+                aria-label={`Task ${i + 1} details`}
+                rows={2}
+                placeholder="Details (optional)"
+                value={task.description}
+                onChange={(e) =>
+                  setInitialTasks(
+                    initialTasks.map((t, j) =>
+                      j === i ? { ...t, description: e.target.value } : t,
+                    ),
+                  )
+                }
+              />
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() =>
+              setInitialTasks([...initialTasks, { title: '', description: '', column: 'todo' }])
+            }
+          >
+            + Add initial task
+          </button>
+        </fieldset>
         <p className="small muted">
           Each project gets its own persistent environment and workspace. Agents run autonomously
           inside an isolated microVM.
@@ -146,7 +205,8 @@ export function NewProject({ close }: { close: () => void }) {
 const tabs = [
   'Overview',
   'Description',
-  'Tasks',
+  'Kanban',
+  'Workspace',
   'Feedback',
   'Last run',
   'History',
@@ -284,12 +344,14 @@ export function ProjectPage({ id }: { id: string }) {
           </section>
         </>
       )}
-      {tab === 'Tasks' && <ProjectEditor key={`${id}-tasks`} project={project} field="task_log" />}
+      {tab === 'Kanban' && <Kanban id={id} />}
+      {tab === 'Workspace' && <WorkspacePanel id={id} />}
       {tab === 'Feedback' && (
         <ProjectEditor key={`${id}-feedback`} project={project} field="next_run_feedback" />
       )}
       {tab === 'Last run' && (
         <section className="panel">
+          <ExecutionOutcome execution={project.latest_execution} />
           <ReportView report={report} />
         </section>
       )}
@@ -312,7 +374,7 @@ function ProjectEditor({
   field,
 }: {
   project: Project;
-  field: 'description' | 'task_log' | 'next_run_feedback';
+  field: 'description' | 'next_run_feedback';
 }) {
   const [text, setText] = useState(project[field]);
   const [name, setName] = useState(project.name);
@@ -321,12 +383,10 @@ function ProjectEditor({
   const action = useAction();
   const labels = {
     description: 'Project description',
-    task_log: 'Shared task log',
     next_run_feedback: 'Feedback for the next run',
   };
   const descriptions = {
     description: 'A clear goal and success criteria guide autonomous work.',
-    task_log: 'You and the agent maintain this durable record of completed work and next steps.',
     next_run_feedback: 'These instructions are included when the next execution starts.',
   };
   return (
@@ -361,36 +421,18 @@ function ProjectEditor({
         )}
         <label>
           <span className="sr-only">{labels[field]}</span>
-          <textarea
-            className={field === 'task_log' ? 'mono' : ''}
-            rows={15}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={field === 'task_log' ? '- [ ] First useful step…' : undefined}
-          />
+          <textarea rows={15} value={text} onChange={(e) => setText(e.target.value)} />
         </label>
         {field === 'description' && (
-          <div className="form-grid">
-            <label>
-              Default model
-              <input
-                value={model ?? ''}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="Provider default"
-              />
-            </label>
-            <label>
-              Default reasoning effort
-              <select value={effort ?? ''} onChange={(e) => setEffort(e.target.value)}>
-                <option value="">Default (medium)</option>
-                {['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(
-                  (value) => (
-                    <option key={value}>{value}</option>
-                  ),
-                )}
-              </select>
-            </label>
-          </div>
+          <ModelSelector
+            defaults
+            model={model}
+            effort={effort}
+            onChange={(values) => {
+              setModel(values.model);
+              setEffort(values.reasoning_effort);
+            }}
+          />
         )}
         <ActionNotice {...action} />
         <div className="form-actions">
@@ -589,7 +631,15 @@ function SnapshotRow({ projectId, snapshot }: { projectId: string; snapshot: Sna
     <div className="snapshot-row">
       <div className="row between wrap">
         <div>
-          <strong>{snapshot.name || shortId(snapshot.id)}</strong>
+          <strong>
+            {snapshot.run_id ? (
+              <>
+                Before run <Link href={`/runs/${snapshot.run_id}`}>{shortId(snapshot.run_id)}</Link>
+              </>
+            ) : (
+              snapshot.name || shortId(snapshot.id)
+            )}
+          </strong>
           <p className="tiny muted">{date(snapshot.created_at)}</p>
         </div>
         <div className="row wrap">
@@ -840,5 +890,43 @@ function SecretEditor({
         </button>
       </div>
     </form>
+  );
+}
+
+function WorkspacePanel({ id }: { id: string }) {
+  const action = useAction();
+  return (
+    <section className="panel">
+      <h2>Workspace</h2>
+      <p className="muted">
+        Download the current source files and generated work. Stop active Runs first. Symlinks and
+        special files are excluded.
+      </p>
+      <button
+        className="primary"
+        disabled={action.busy}
+        onClick={() => {
+          void action.run(async () => {
+            const response = await fetch(`/api/v1/projects/${id}/workspace/archive`, {
+              credentials: 'same-origin',
+              headers: { 'X-Tokendrain-Request': '1' },
+            });
+            if (!response.ok) {
+              const body = await response.json();
+              throw new Error(body.detail || 'Workspace download failed');
+            }
+            const url = URL.createObjectURL(await response.blob());
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `tokendrain-${id.slice(0, 8)}-workspace.tar.gz`;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          });
+        }}
+      >
+        {action.busy ? 'Preparing archive…' : 'Download workspace (.tar.gz)'}
+      </button>
+      <ActionNotice {...action} />
+    </section>
   );
 }

@@ -1,8 +1,10 @@
+import { ModelSelector } from './model-selector';
+import { ActivityTimeline } from './activity';
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { mutate, useAction, useEvents, useResource } from './api';
 import type {
-  CodexModel,
+  ProjectGitHub,
   LiveEvent,
   Project,
   ProjectConfig,
@@ -24,12 +26,13 @@ import {
   Loading,
   PageTitle,
   ReportView,
+  ExecutionOutcome,
   shortId,
   UsageCards,
   useNavigation,
 } from './ui';
 
-const terminal = new Set(['completed', 'cancelled', 'failed', 'blocked']);
+const terminal = new Set(['completed', 'cancelled', 'failed', 'blocked', 'stopped']);
 
 export function RunTable({ runs }: { runs: Run[] }) {
   if (!runs.length)
@@ -174,6 +177,17 @@ function sameWindow(condition: StopCondition, window: UsageWindow) {
   );
 }
 
+function GitHubRunWarning({ id }: { id: string }) {
+  const integration = useResource<ProjectGitHub | null>(`/projects/${id}/github`);
+  return integration.data?.permissions.pull_requests === 'write' &&
+    integration.data.permissions.contents !== 'write' ? (
+    <div className="notice warning">
+      This project can create pull requests, but cannot publish the source branch. Give the target
+      repository Contents write access.
+    </div>
+  ) : null;
+}
+
 export function RunBuilder({
   initial,
   selectedProject,
@@ -188,11 +202,13 @@ export function RunBuilder({
   submitLabel?: string;
 }) {
   const projects = useResource<Project[]>('/projects');
-  const models = useResource<CodexModel[]>('/auth/openai/models');
   const usage = useResource<UsageWindow[]>('/usage');
   const [configs, setConfigs] = useState<ProjectConfig[]>(initial?.projects ?? []);
   const [conditions, setConditions] = useState<StopCondition[]>(
     initial?.stop_conditions ?? [{ kind: 'provider_limit' }, { kind: 'project_completed' }],
+  );
+  const [thresholdMode, setThresholdMode] = useState<'graceful' | 'hard'>(
+    initial?.threshold_mode ?? 'graceful',
   );
   const [parallel, setParallel] = useState(initial?.parallel ?? true);
   const [initialized, setInitialized] = useState(false);
@@ -250,6 +266,7 @@ export function RunBuilder({
               })),
               stop_conditions: conditions,
               parallel,
+              threshold_mode: thresholdMode,
             }),
           );
       }}
@@ -278,10 +295,6 @@ export function RunBuilder({
         <div className="run-projects">
           {projects.data?.map((project) => {
             const config = configs.find((item) => item.project_id === project.id);
-            const selectedModel = models.data?.find((item) => item.id === config?.model);
-            const efforts = selectedModel?.reasoning_efforts?.length
-              ? selectedModel.reasoning_efforts
-              : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
             const patch = (values: Partial<ProjectConfig>) =>
               setConfigs((old) =>
                 old.map((item) => (item.project_id === project.id ? { ...item, ...values } : item)),
@@ -300,47 +313,19 @@ export function RunBuilder({
                   </span>
                 </label>
                 {config && (
-                  <div className="model-settings">
-                    <label>
-                      Model
-                      <input
-                        list="codex-models"
-                        value={config.model}
-                        onChange={(e) => patch({ model: e.target.value })}
-                        placeholder="Provider default"
-                      />
-                    </label>
-                    <label>
-                      Reasoning
-                      <select
-                        value={config.reasoning_effort}
-                        onChange={(e) => patch({ reasoning_effort: e.target.value })}
-                      >
-                        <option value="">Default (medium)</option>
-                        {efforts.map((effort) => (
-                          <option key={effort}>{effort}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
+                  <>
+                    <ModelSelector
+                      model={config.model}
+                      effort={config.reasoning_effort}
+                      onChange={patch}
+                    />
+                    <GitHubRunWarning id={project.id} />
+                  </>
                 )}
               </div>
             );
           })}
         </div>
-        <datalist id="codex-models">
-          {models.data?.map((model) => (
-            <option value={model.id} key={model.id}>
-              {model.name || model.id}
-            </option>
-          ))}
-        </datalist>
-        {models.error && (
-          <p className="small muted">
-            Model discovery is unavailable: {models.error}. You can enter a model ID or use the
-            provider default.
-          </p>
-        )}
         <label className="checkbox top-space">
           <input
             type="checkbox"
@@ -355,7 +340,7 @@ export function RunBuilder({
           <span className="step-number">2</span> Stop when any condition is met
         </h2>
         <p className="muted">
-          Usage thresholds are checked between useful turns. Projects stop starting new work at the
+          Usage thresholds are monitored during work. Projects stop starting new work at the
           boundary.
         </p>
         <ErrorNotice error={usage.error} />
@@ -495,6 +480,39 @@ export function RunBuilder({
           </label>
         </div>
       </section>
+      <section className="panel">
+        <h3>When a usage limit is reached</h3>
+        <label className="checkbox">
+          <input
+            type="radio"
+            name="threshold-mode"
+            checked={thresholdMode === 'graceful'}
+            onChange={() => setThresholdMode('graceful')}
+          />
+          <span>
+            <strong>Graceful stop</strong>
+            <span className="hint">
+              Ask the agent to wrap up and save a checkpoint. May use a little more allowance (up to
+              90 seconds).
+            </span>
+          </span>
+        </label>
+        <label className="checkbox">
+          <input
+            type="radio"
+            name="threshold-mode"
+            checked={thresholdMode === 'hard'}
+            onChange={() => setThresholdMode('hard')}
+          />
+          <span>
+            <strong>Hard limit</strong>
+            <span className="hint">
+              Interrupt when the threshold is observed. No finalization turn. Provider updates can
+              arrive after the threshold is crossed.
+            </span>
+          </span>
+        </label>
+      </section>
       {children}
       <ActionNotice {...action} />
       <div className="run-submit">
@@ -605,7 +623,7 @@ export function RunPage({ id }: { id: string }) {
           Executions & reports
         </button>
         <button className={tab === 'events' ? 'active' : ''} onClick={() => setTab('events')}>
-          Live events <span className={`status-dot ${connected ? 'online' : ''}`} />
+          Activity <span className={`status-dot ${connected ? 'online' : ''}`} />
         </button>
       </nav>
       {tab === 'executions' ? (
@@ -625,7 +643,14 @@ export function RunPage({ id }: { id: string }) {
                 </div>
                 <Badge status={execution.status} />
               </div>
-              {execution.error && <ErrorNotice error={execution.error} />}
+              <ExecutionOutcome execution={execution} />
+              {execution.checkpoint_from_execution_id &&
+                execution.checkpoint_from_execution_id !== execution.id && (
+                  <p className="small muted">
+                    Checkpoint from a previous execution. This execution produced no new valid
+                    report.
+                  </p>
+                )}
               {execution.report ? (
                 <ReportView report={execution.report} />
               ) : (
@@ -653,25 +678,16 @@ export function RunPage({ id }: { id: string }) {
           <div className="row between">
             <h2>Execution events</h2>
             <span className="tiny muted">
-              {connected ? 'Live connection' : 'Reconnecting…'} · Last {log.length} events
+              {connected
+                ? 'Live connection'
+                : !terminal.has(data.status)
+                  ? 'Activity connection lost — reconnecting…'
+                  : 'Saved activity'}{' '}
+              · Last {log.length} events
             </span>
           </div>
           <ErrorNotice error={history.error} />
-          <div className="event-log" role="log" aria-live="off">
-            {log.length ? (
-              log.map((event, index) => (
-                <div className="log-row" key={`${event.id}-${index}`}>
-                  <time>
-                    {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}
-                  </time>
-                  <span className="log-type">{event.type}</span>
-                  <span>{event.message || (event.data ? JSON.stringify(event.data) : '')}</span>
-                </div>
-              ))
-            ) : (
-              <p className="muted">Waiting for execution events…</p>
-            )}
-          </div>
+          <ActivityTimeline events={log} executions={data.executions} />
         </section>
       )}
     </>

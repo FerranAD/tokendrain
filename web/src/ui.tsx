@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
-import type { Report, StopCondition, UsageWindow } from './types';
+import type { Execution, Report, StopCondition, UsageWindow } from './types';
 
 export const Navigation = createContext({ path: '/', go: (_path: string) => {} });
 export const useNavigation = () => useContext(Navigation);
@@ -135,6 +135,14 @@ export function conditionLabel(condition: StopCondition) {
   return 'Project is complete';
 }
 
+function resetIn(value: string) {
+  const minutes = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 60000));
+  if (minutes === 0) return 'reset due';
+  if (minutes >= 1440)
+    return `in ${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`;
+  return `in ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 export function UsageCards({ windows }: { windows: UsageWindow[] }) {
   if (!windows.length)
     return (
@@ -151,7 +159,13 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
           key={`${window.limit_id}-${window.window_minutes}-${index}`}
         >
           <div className="row between">
-            <span className="small-label">{window.name || window.limit_id}</span>
+            <span className="small-label">
+              {window.window_minutes === 300
+                ? '5-hour'
+                : window.window_minutes === 10080
+                  ? 'Weekly'
+                  : window.name || window.limit_id}
+            </span>
             <span className="usage-value">
               {window.used_percent.toFixed(1)}
               <small>%</small>
@@ -171,9 +185,14 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
             />
           </div>
           <div className="row between muted tiny">
-            <span>{duration(window.window_minutes)} window</span>
             <span>
-              {window.resets_at ? `Resets ${date(window.resets_at)}` : 'Reset not supplied'}
+              {Math.max(0, 100 - window.used_percent).toFixed(1)}% remaining ·{' '}
+              {duration(window.window_minutes)} window
+            </span>
+            <span>
+              {window.resets_at
+                ? `Resets ${date(window.resets_at)} · ${resetIn(window.resets_at)}`
+                : 'Reset not supplied'}
             </span>
           </div>
         </article>
@@ -184,11 +203,7 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
 
 export function ReportView({ report }: { report?: Report | null }) {
   if (!report)
-    return (
-      <Empty title="No report yet">
-        The next execution will leave a structured summary of its work and any blockers.
-      </Empty>
-    );
+    return <Empty title="No report yet">No valid agent checkpoint has been produced yet.</Empty>;
   const sections = [
     { title: 'Completed', items: report.completed },
     { title: 'Remaining', items: report.remaining },
@@ -197,7 +212,7 @@ export function ReportView({ report }: { report?: Report | null }) {
   return (
     <div className="report">
       <div className="row between">
-        <h3>Run report</h3>
+        <h3>Last agent checkpoint</h3>
         <Badge status={report.status} />
       </div>
       <p className="preserve">{report.summary}</p>
@@ -250,6 +265,54 @@ export function ReportView({ report }: { report?: Report | null }) {
           <summary>Usage at end of execution</summary>
           <UsageCards windows={report.usage.end} />
         </details>
+      )}
+    </div>
+  );
+}
+
+export function ExecutionOutcome({ execution }: { execution?: Execution | null }) {
+  if (!execution) return null;
+  const reason = execution.termination_reason;
+  const hard = execution.threshold_mode === 'hard';
+  const label =
+    reason === 'user_cancelled'
+      ? 'Cancelled by user'
+      : reason === 'usage_threshold'
+        ? `Stopped — ${hard ? 'hard usage limit' : 'usage threshold'} reached`
+        : reason === 'provider_limit'
+          ? 'Stopped — provider limit reached'
+          : reason === 'runtime_limit'
+            ? 'Stopped — runtime limit reached'
+            : reason === 'no_progress'
+              ? 'Stopped — no progress'
+              : reason === 'infrastructure_error'
+                ? 'Infrastructure failure'
+                : execution.status.replaceAll('_', ' ');
+  return (
+    <div className="execution-outcome">
+      <strong>{label.toUpperCase()}</strong>
+      {execution.finished_at && (
+        <p className="muted small">Run stopped {date(execution.finished_at)}</p>
+      )}
+      {execution.termination_detail && <p>{execution.termination_detail}</p>}
+      {reason === 'usage_threshold' && (
+        <p className="small">
+          {hard
+            ? execution.interrupted
+              ? 'Active Codex work was interrupted when the configured limit was observed.'
+              : 'No further model work was started after the limit was observed.'
+            : execution.interrupted
+              ? 'Graceful stop timed out; Codex was interrupted.'
+              : 'Graceful stop completed.'}
+        </p>
+      )}
+      {execution.interrupted && (
+        <p className="small muted">
+          Newer work was interrupted. The last valid agent checkpoint is retained below.
+        </p>
+      )}
+      {execution.error && reason === 'infrastructure_error' && (
+        <ErrorNotice error={execution.error} />
       )}
     </div>
   );

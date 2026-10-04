@@ -18,7 +18,15 @@ from tokendrain.domain import utcnow
 
 @pytest.fixture
 async def api(tmp_path: Path) -> AsyncIterator[tuple[httpx.AsyncClient, Application]]:
-    settings = Settings(state_dir=tmp_path, backend="mock", public_url="http://testserver")
+    token_file = tmp_path / "admin-token"
+    token_file.write_text("t" * 48)
+    token_file.chmod(0o600)
+    settings = Settings(
+        state_dir=tmp_path,
+        backend="mock",
+        public_url="http://testserver",
+        admin_token_file=token_file,
+    )
     app = create_app(settings, Overrides(start_workers=False))
     async with LifespanManager(app):
         services = app.state.services
@@ -81,15 +89,13 @@ async def test_auth_origin_host_upload_and_secret_validation(
 async def test_project_run_reservation_crud(api: tuple[httpx.AsyncClient, Application]):
     client, services = api
     first, second = await new_project(client, "first"), await new_project(client, "second")
-    value = await client.patch(
+    await client.patch(
         f"/api/v1/projects/{first}",
         json={
-            "task_log": "- [ ] Build",
             "next_run_feedback": "Test carefully",
             "description": "New goal",
         },
     )
-    assert value.json()["task_log"] == "- [ ] Build"
     template = {
         "projects": [{"project_id": first}, {"project_id": second}],
         "parallel": False,
@@ -378,7 +384,15 @@ async def test_provider_configuration_cancellation_releases_admission(api):
 
 
 async def test_restart_clears_stale_provider_operation(tmp_path):
-    settings = Settings(state_dir=tmp_path, backend="mock", public_url="http://testserver")
+    token_file = tmp_path / "admin-token"
+    token_file.write_text("t" * 48)
+    token_file.chmod(0o600)
+    settings = Settings(
+        state_dir=tmp_path,
+        backend="mock",
+        public_url="http://testserver",
+        admin_token_file=token_file,
+    )
     first = await Application.open(settings, Overrides(start_workers=False))
     async with first.sessions.begin() as db:
         db.add(Setting(key="provider_change", value={"started_at": utcnow().isoformat()}))
@@ -421,3 +435,97 @@ async def test_secret_mutations_reject_reserved_project_and_preserve_values(api)
     assert await services.credentials.get(original_ref) == b"original"
     assert await services.credentials.get("orphan") is None
     assert (await client.get(base)).json()[0]["description"] == "test"
+
+
+async def test_kanban_order_origin_and_agent_approval_boundary(api):
+    from tokendrain.domain import TaskMutation
+
+    client, services = api
+    response = await client.post(
+        "/api/v1/projects",
+        json={
+            "name": "Board",
+            "initial_tasks": [
+                {"title": "Approved", "column": "todo"},
+                {"title": "Waiting", "column": "backlog"},
+            ],
+        },
+    )
+    project = response.json()["id"]
+    tasks = (await client.get(f"/api/v1/projects/{project}/tasks")).json()
+    backlog = next(t for t in tasks if t["column"] == "backlog")
+    with pytest.raises(ValueError, match="Only users"):
+        async with services.sessions.begin() as db:
+            await services.projects.mutate_tasks_in(
+                db, project, [TaskMutation(id=backlog["id"], column="todo")], agent=True
+            )
+    with pytest.raises(ValueError, match="Only users"):
+        async with services.sessions.begin() as db:
+            await services.projects.mutate_tasks_in(
+                db, project, [TaskMutation(id=backlog["id"], column="done")], agent=True
+            )
+    async with services.sessions.begin() as db:
+        await services.projects.mutate_tasks_in(
+            db, project, [TaskMutation(title="Discovery", column="todo")], agent=True
+        )
+    discovered = next(
+        t for t in await services.projects.tasks(project) if t["title"] == "Discovery"
+    )
+    assert discovered["origin"] == "agent" and discovered["column"] == "backlog"
+    moved = await client.post(
+        f"/api/v1/projects/{project}/tasks",
+        json=[{"id": backlog["id"], "column": "todo", "position": 0}],
+    )
+    assert next(t for t in moved.json() if t["id"] == backlog["id"])["position"] == 0
+    other = await new_project(client, "Other")
+    assert (
+        await client.post(
+            f"/api/v1/projects/{other}/tasks", json=[{"id": backlog["id"], "column": "done"}]
+        )
+    ).status_code == 409
+    download = await client.get(f"/api/v1/projects/{project}/workspace/archive")
+    assert download.status_code == 200 and download.headers["content-type"] == "application/gzip"
+    assert (
+        await client.delete(f"/api/v1/projects/{project}/tasks/{backlog['id']}")
+    ).status_code == 204
+
+
+async def test_auth_none_preserves_request_boundary(tmp_path):
+    app = create_app(
+        Settings(
+            state_dir=tmp_path, backend="mock", public_url="http://testserver", auth_mode="none"
+        ),
+        Overrides(start_workers=False),
+    )
+    async with LifespanManager(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            assert (await client.get("/api/v1/projects")).status_code == 200
+            assert (await client.get("/api/v1/session")).json()["auth_mode"] == "none"
+            assert not (tmp_path / "admin-token").exists()
+            assert (
+                await client.post("/api/v1/projects", json={"name": "No header"})
+            ).status_code == 403
+            assert (
+                await client.post(
+                    "/api/v1/projects",
+                    headers={"X-Tokendrain-Request": "1", "Origin": "https://evil.test"},
+                    json={"name": "Wrong origin"},
+                )
+            ).status_code == 403
+            assert (
+                await client.post(
+                    "/api/v1/projects",
+                    headers={"X-Tokendrain-Request": "1"},
+                    json={"name": "Allowed"},
+                )
+            ).status_code == 201
+
+
+async def test_token_mode_requires_supplied_file(tmp_path):
+    with pytest.raises(ValueError, match="ADMIN_TOKEN_FILE"):
+        await Application.open(
+            Settings(state_dir=tmp_path, backend="mock"), Overrides(start_workers=False)
+        )
+    assert not (tmp_path / "admin-token").exists()

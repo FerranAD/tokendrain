@@ -48,6 +48,21 @@ in
       default = null;
       description = "Runtime path to a 32-byte master key (or base64 encoding). Never use a Nix path containing a secret. With null, generate a protected local key on first start.";
     };
+    auth = {
+      mode = mkOption {
+        type = types.enum [
+          "token"
+          "none"
+        ];
+        default = "token";
+        description = "Administrative token login, or external/private-network access control.";
+      };
+      adminTokenFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Runtime secret file containing an admin token (at least 32 characters). Supports agenix/sops-nix.";
+      };
+    };
     concurrency = mkOption {
       type = types.ints.between 1 64;
       default = 2;
@@ -124,6 +139,10 @@ in
   };
   config = mkIf cfg.enable {
     assertions = [
+      {
+        assertion = cfg.auth.mode != "token" || cfg.auth.adminTokenFile != null;
+        message = "Tokendrain auth.mode=token requires auth.adminTokenFile (a runtime secret path).";
+      }
       {
         assertion = cfg.microvm.defaults.memoryMiB <= cfg.microvm.maxMemoryMiB;
         message = "Tokendrain default memory must not exceed microvm.maxMemoryMiB.";
@@ -224,6 +243,8 @@ in
         if cfg.masterKeyFile == null then "/var/lib/tokendrain-keys/master.key" else cfg.masterKeyFile;
       guest_artifacts = toString cfg.microvm.guestArtifacts;
       helper_socket = "/run/tokendrain/helper.sock";
+      auth_mode = cfg.auth.mode;
+      admin_token_file = if cfg.auth.mode == "token" then "/run/tokendrain-auth/admin-token" else null;
       listen_address = cfg.web.listenAddress;
       port = cfg.web.port;
     };
@@ -265,6 +286,7 @@ in
         pkgs.systemd
         pkgs.iproute2
         pkgs.nftables
+        pkgs.util-linux
         pkgs.coreutils
       ];
       serviceConfig = {
@@ -290,6 +312,7 @@ in
           "AF_INET"
         ];
         CapabilityBoundingSet = [
+          "CAP_SYS_ADMIN" # Read-only exports in a private mount namespace.
           "CAP_NET_ADMIN"
           "CAP_CHOWN"
           "CAP_DAC_OVERRIDE"
@@ -313,7 +336,8 @@ in
         TOKENDRAIN_MASTER_KEY_FILE = "/run/tokendrain-auth/master-key";
         TOKENDRAIN_LISTEN_ADDRESS = cfg.web.listenAddress;
         TOKENDRAIN_PUBLIC_URL = cfg.web.publicUrl;
-        TOKENDRAIN_OPENAI_REDIRECT_URI = "http://127.0.0.1:${toString cfg.web.port}/auth/callback";
+        TOKENDRAIN_AUTH_MODE = cfg.auth.mode;
+        TOKENDRAIN_ADMIN_TOKEN_FILE = "/run/tokendrain-auth/admin-token";
         TOKENDRAIN_AUTH_RUNTIME_DIR = "/run/tokendrain-auth";
         TOKENDRAIN_PORT = toString cfg.web.port;
         TOKENDRAIN_MAX_CONCURRENCY = toString cfg.concurrency;
@@ -334,7 +358,12 @@ in
       serviceConfig = {
         # systemd may expose credentials with group-readable mode under its
         # protected mount. Copy to a private tmpfs file for the app's 0600 rule.
-        ExecStartPre = "${pkgs.coreutils}/bin/install -m 0600 %d/master-key /run/tokendrain-auth/master-key";
+        ExecStartPre = [
+          "${pkgs.coreutils}/bin/install -m 0600 %d/master-key /run/tokendrain-auth/master-key"
+        ]
+        ++ lib.optional (
+          cfg.auth.mode == "token"
+        ) "${pkgs.coreutils}/bin/install -m 0600 %d/admin-token /run/tokendrain-auth/admin-token";
         ExecStart = "${cfg.package}/bin/tokendraind";
         User = "tokendrain";
         Group = "tokendrain";
@@ -344,7 +373,10 @@ in
           "master-key:${
             if cfg.masterKeyFile == null then "/var/lib/tokendrain-keys/master.key" else cfg.masterKeyFile
           }"
-        ];
+        ]
+        ++ lib.optional (
+          cfg.auth.mode == "token" && cfg.auth.adminTokenFile != null
+        ) "admin-token:${cfg.auth.adminTokenFile}";
         WorkingDirectory = cfg.stateDirectory;
         Restart = "on-failure";
         RestartSec = 3;

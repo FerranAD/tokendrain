@@ -11,6 +11,7 @@ pkgs.testers.runNixOSTest {
       documentation.enable = false;
       services.tokendrain = {
         enable = true;
+        auth.mode = "none";
         microvm.guestArtifacts = guestArtifacts;
         microvm.defaults.memoryMiB = 1536;
         microvm.defaults.diskGiB = 1;

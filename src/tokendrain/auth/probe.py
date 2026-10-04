@@ -21,6 +21,7 @@ class ModelChoice(BaseModel):
     id: str
     display_name: str
     description: str = ""
+    is_default: bool = False
     default_reasoning_effort: str | None = None
     supported_reasoning_efforts: list[str] = Field(default_factory=list)
 
@@ -33,22 +34,16 @@ class AccountProbeResult(BaseModel):
     usage_error: str | None = None
 
 
-def parse_model(model: dict[str, Any], *, siwc: bool = False) -> ModelChoice:
-    identifier = str(model["slug"] if siwc else model.get("model", model["id"]))
-    efforts = (
-        model.get("supported_reasoning_levels", [])
-        if siwc
-        else model.get("supportedReasoningEfforts", [])
-    )
+def parse_model(model: dict[str, Any]) -> ModelChoice:
+    identifier = str(model.get("model") or model["id"])
     return ModelChoice(
         id=identifier,
-        display_name=str(model.get("display_name" if siwc else "displayName") or identifier),
+        display_name=str(model.get("displayName") or identifier),
         description=str(model.get("description") or ""),
-        default_reasoning_effort=model.get(
-            "default_reasoning_level" if siwc else "defaultReasoningEffort"
-        ),
+        is_default=bool(model.get("isDefault", False)),
+        default_reasoning_effort=model.get("defaultReasoningEffort"),
         supported_reasoning_efforts=[
-            str(item["effort"] if siwc else item["reasoningEffort"]) for item in efforts
+            str(item["reasoningEffort"]) for item in model.get("supportedReasoningEfforts", [])
         ],
     )
 
@@ -77,27 +72,6 @@ class AuthProbe:
                 raise ValueError("connect an OpenAI account before reading usage and models")
             runtime = await self.auth.runtime_credentials(selected.id)
             result = AccountProbeResult(account_id=selected.id, observed_at=time.time())
-            if runtime.mode == "siwc":
-                response = await self.http.get(
-                    "https://api.openai.com/v1/models",
-                    headers={"Authorization": f"Bearer {runtime.access_token}"},
-                )
-                if response.is_error:
-                    raise ValueError(
-                        f"OpenAI model catalog request failed (HTTP {response.status_code})"
-                    )
-                payload = response.json()
-                result.models = [
-                    parse_model(model, siwc=True)
-                    for model in payload["models"]
-                    if model.get("visibility") == "list"
-                ]
-                result.usage_error = (
-                    "The Sign in with ChatGPT Responses provider does not publish usage windows "
-                    "through the documented account/rateLimits/read interface. "
-                    "Use duration/provider-limit stopping rules or import a Codex ChatGPT account."
-                )
-                return result
             async with isolated_codex(self.runtime_dir, executable=self.executable) as (peer, _):
                 client = CodexClient(peer)
                 await client.initialize()
