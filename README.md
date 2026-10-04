@@ -1,29 +1,52 @@
-# tokendrain
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tokendrain-logo-horizontal-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/tokendrain-logo-horizontal.png">
+    <img alt="tokendrain" src="docs/assets/tokendrain-logo-horizontal.png" width="520">
+  </picture>
+</h1>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tokendrain-logo-horizontal-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/tokendrain-logo-horizontal.png">
-  <img alt="tokendrain" src="docs/assets/tokendrain-logo-horizontal.png" width="520">
-</picture>
+<p align="center">
+  <strong>Put your Codex allowance to work before it resets.</strong><br>
+  Give your projects an autonomous worker and a workspace that lasts.
+</p>
 
-**Put your Codex allowance to work before it resets.**
+<p align="center">
+  <a href="#install-on-nixos"><img alt="Host: NixOS" src="https://img.shields.io/badge/Host-NixOS-5277C3?style=flat-square"></a>
+  <a href="docs/microvms.md"><img alt="VMs: Firecracker" src="https://img.shields.io/badge/VMs-Firecracker-E36209?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-22A06B?style=flat-square"></a>
+</p>
 
-Tokendrain is a self-hosted NixOS service that runs Codex autonomously inside Firecracker microVMs. Give a project a goal, choose a model and stopping conditions, and let it work. Its source tree, installed tools, Kanban board, and checkpoints remain available for the next run.
+<p align="center">
+  <a href="#install-on-nixos"><strong>Get started</strong></a> ·
+  <a href="#what-it-does">Features</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="docs/security.md">Security</a> ·
+  <a href="docs/development.md">Contribute</a>
+</p>
 
-Agents have root access inside their VMs and execute commands without approval prompts. The VM, host firewall, and scoped runtime credentials define the boundary. Read the [security model](docs/security.md) before supplying credentials.
+Tokendrain is a **self-hosted service for autonomous Codex work**. Set a project goal, approve tasks on its Kanban board, and run them now or on a schedule. Each execution gets a fresh Firecracker microVM with the project's existing source tree, installed tools, and development environment. Follow the work in your browser, review the report, and pick up where the last run stopped.
 
 ## What it does
 
-- Keeps separate persistent **environment** and **workspace** disks for every project.
-- Runs several projects with per-project model/reasoning settings and bounded concurrency.
-- Supports graceful wrap-up or immediate interruption on observed usage thresholds, plus runtime budgets and natural completion/blocker boundaries.
-- Creates ordinary runs from timezone-aware cron schedules.
-- Connects through imported Codex `auth.json`, with host-owned refresh and runtime token rotation.
-- Supplies narrowly scoped GitHub App installation tokens and optional described `.env` secrets.
-- Provides a React UI for projects, tasks, feedback, reports, live events, schedules, snapshots, and account settings.
-- Reconciles surviving VMs and interrupted executions after daemon restarts.
+| Feature | What you get |
+| --- | --- |
+| **A workspace that lasts** | Separate persistent workspace and environment disks keep source, tools, home, and caches ready for the next run. |
+| **A fresh VM for every run** | Firecracker microVMs give each execution its own machine. Snapshot and selectively restore project disks from the UI. |
+| **Work you control** | Approve tasks through Kanban, choose each project's model and reasoning effort, and leave feedback for the next run. |
+| **Runs on your terms** | Start several projects with bounded concurrency, use timezone-aware cron schedules, and set runtime or observed usage thresholds. |
+| **A window into the work** | Follow live events and reports, browse workspace files and previews while idle, and download the results. Light, dark, and system themes are included. |
+| **Scoped integrations** | Import Codex `auth.json` with host-managed refresh, grant repository permissions through a GitHub App, and supply described runtime secrets. |
 
-The service is one Python daemon with SQLite. It does not require Redis, a distributed queue, Kubernetes, or per-project NixOS configuration.
+### From goal to next run
+
+1. **Define the work.** Create a project, add approved tasks to Todo, and optionally connect a repository and secrets. Backlog stays reserved for your review.
+2. **Let it run.** Choose a model and stopping conditions, then start immediately or save a schedule. The agent resumes In progress tasks before Todo and stops when approved work is finished or blocked.
+3. **Review and repeat.** Read the report, inspect files, and update tasks or feedback. The next execution starts in a fresh VM with the same persistent project disks.
+
+The service runs on **NixOS with KVM**, using one Python daemon and SQLite. Projects are managed through the application without per-project NixOS configuration. After a daemon restart, it reconciles surviving VMs and interrupted executions.
+
+Agents have **root access inside their VMs** and execute commands without approval prompts. The VM, host firewall, and scoped runtime credentials define the boundary. Read the [security model](docs/security.md) before supplying credentials. Usage thresholds depend on provider observations and are not exact quota enforcement; see [First project](#first-project) for graceful and hard stop behavior.
 
 ## Install on NixOS
 
