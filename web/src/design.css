@@ -251,6 +251,12 @@ label .hint,
 .form-grid {
   gap: 16px;
 }
+.notification-controls {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
 .form-actions {
   border-top: 1px solid var(--line);
   padding-top: 16px;

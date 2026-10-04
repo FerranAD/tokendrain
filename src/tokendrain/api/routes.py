@@ -1,5 +1,4 @@
 import json
-import logging
 import time
 from collections.abc import Awaitable, Callable
 from functools import wraps
@@ -20,6 +19,7 @@ from sqlalchemy import delete, func, select, text
 from starlette.background import BackgroundTask
 
 from tokendrain import __version__
+from tokendrain.account_metadata import account_probe
 from tokendrain.api.app import current, encoded
 from tokendrain.api.schemas import (
     AuthImport,
@@ -33,7 +33,7 @@ from tokendrain.api.schemas import (
     SnapshotInput,
 )
 from tokendrain.application import Application
-from tokendrain.auth.probe import AuthProbe, requires_reauthentication
+from tokendrain.auth.probe import requires_reauthentication
 from tokendrain.codex.rpc import RpcError
 from tokendrain.db.models import (
     Event,
@@ -60,11 +60,11 @@ from tokendrain.domain import (
 )
 from tokendrain.events import event_json
 from tokendrain.github.provider import GitHubConfig, IntegrationInput
+from tokendrain.notifications import NtfyInput
 from tokendrain.scheduler.service import next_occurrence
 from tokendrain.secrets import SecretService, parse_dotenv
 from tokendrain.services import columns, validate_github_access
 from tokendrain.storage import FileProjectStorage
-from tokendrain.usage import normalize_rate_limits
 
 router = APIRouter()
 API = "/api/v1"
@@ -512,45 +512,6 @@ async def events(request: Request) -> StreamingResponse:
     )
 
 
-async def account_probe(services: Application, *, force: bool = False) -> dict[str, Any]:
-    assert services.probe_lock is not None
-    async with services.probe_lock:
-        cached = services.probe_cache
-        if not force and cached and time.time() - float(str(cached["observed_at"])) < 60:
-            return cached
-        accounts = await services.auth.accounts()
-        if not any(account.connected for account in accounts):
-            return {
-                "models": [],
-                "usage": {},
-                "observed_at": time.time(),
-                "usage_error": "Connect OpenAI to observe usage.",
-            }
-        try:
-            result = await AuthProbe(
-                services.auth, services.http, services.settings.auth_runtime_dir
-            ).read()
-            value = result.model_dump()
-        except (RpcError, ValueError, OSError, TimeoutError, httpx.HTTPError) as exc:
-            logging.getLogger(__name__).warning(
-                "Codex metadata probe unavailable (%s)", type(exc).__name__
-            )
-            value = {
-                "models": (cached or {}).get("models", []),
-                "usage": {},
-                "observed_at": time.time(),
-                "usage_error": "Codex metadata unavailable. Check the host Codex process "
-                "and account credentials in Settings; usage will be retried shortly.",
-            }
-        # Cache failures too: page refreshes must not launch repeated failing probes.
-        # Keep historical observations untouched instead of manufacturing zero usage.
-        services.probe_cache = value
-        windows = normalize_rate_limits(value["usage"])
-        if windows:
-            await services.runs.observe(windows)
-        return value
-
-
 @router.get(API + "/usage")
 async def usage(request: Request) -> Any:
     services = current(request)
@@ -985,3 +946,21 @@ async def update_system(request: Request, body: PlatformInput) -> Any:
         services.storage.disk_gib = body.vm_defaults.disk_gib
     await services.events.publish("system.updated")
     return await system(request)
+
+
+@router.get(API + "/notifications/ntfy")
+async def ntfy_status(request: Request) -> Any:
+    return await current(request).notifications.status()
+
+
+@router.put(API + "/notifications/ntfy")
+async def ntfy_configure(request: Request, body: NtfyInput) -> Any:
+    notifications = current(request).notifications
+    await notifications.configure(body)
+    return await notifications.status()
+
+
+@router.post(API + "/notifications/ntfy/test")
+async def ntfy_test(request: Request) -> Any:
+    await current(request).notifications.test()
+    return {"sent": True}

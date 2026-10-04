@@ -16,8 +16,10 @@ from tokendrain.config import Settings
 from tokendrain.credentials.store import EncryptedFileCredentialStore, load_master_key
 from tokendrain.db.engine import migrate, open_database
 from tokendrain.db.models import Setting
+from tokendrain.domain import UsageWindow, utcnow
 from tokendrain.events import EventBus
 from tokendrain.github.provider import GitHubProvider
+from tokendrain.notifications import NtfyService
 from tokendrain.orchestration.driver import RealSessionFactory, SessionFactory
 from tokendrain.orchestration.mock import MockSessionFactory, MockStorage, MockVmBackend
 from tokendrain.orchestration.supervisor import Supervisor
@@ -58,6 +60,7 @@ class Application:
     tokens: SessionTokens
     lock: BinaryIO
     started_at: float
+    notifications: NtfyService
     task: asyncio.Task[None] | None = None
     probe_lock: asyncio.Lock | None = None
     probe_cache: dict[str, object] | None = None
@@ -143,6 +146,15 @@ class Application:
                 credentials,
                 github,
             )
+
+            async def notification_usage() -> list[UsageWindow]:
+                from tokendrain.account_metadata import account_probe
+
+                windows = await runs.latest_usage()
+                if not windows or (utcnow() - windows[0].observed_at).total_seconds() >= 60:
+                    await account_probe(app)
+                return await runs.latest_usage()
+
             app = cls(
                 settings,
                 engine,
@@ -160,6 +172,7 @@ class Application:
                 tokens,
                 lock,
                 time.monotonic(),
+                NtfyService(sessions, credentials, http, settings.public_url, notification_usage),
                 probe_lock=asyncio.Lock(),
             )
             if overrides.start_workers:
@@ -185,6 +198,7 @@ class Application:
         async with asyncio.TaskGroup() as group:
             group.create_task(self.supervisor.serve(), name="run-supervisor")
             group.create_task(self.scheduler.serve(), name="scheduler")
+            group.create_task(self.notifications.serve(), name="ntfy-notifications")
             group.create_task(self.housekeeping(), name="event-retention")
 
     async def housekeeping(self) -> None:

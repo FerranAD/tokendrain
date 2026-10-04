@@ -80,6 +80,14 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
       '/session': { authenticated: true, auth_mode: 'token' },
       '/projects/project-a/tasks': [],
       '/system': system,
+      '/notifications/ntfy': {
+        enabled: false,
+        server_url: 'https://ntfy.sh',
+        topic: '',
+        rules: [],
+        has_token: false,
+        delivery: {},
+      },
       '/projects': [current, second],
       '/projects/project-a': current,
       '/projects/new-project': { ...project, id: 'new-project', name: 'Useful project' },
@@ -896,4 +904,56 @@ test('Codex connection checks show reauthentication guidance and recover', async
   await page.getByRole('button', { name: 'Check connection', exact: true }).click();
   await expect(page.getByText('Connection checked · usage available')).toBeVisible();
   await expect(page.getByText('Connection needs attention', { exact: true })).toHaveCount(0);
+});
+
+test('ntfy settings save reminders and send a test using saved settings', async ({ page }) => {
+  await fixture(page);
+  let config = {
+    enabled: false,
+    server_url: 'https://ntfy.sh',
+    topic: '',
+    rules: [],
+    has_token: false,
+    delivery: {},
+  };
+  let saved: Record<string, unknown> = {};
+  let testCount = 0;
+  await page.route('**/api/v1/notifications/ntfy**', async (route) => {
+    const request = route.request();
+    if (request.method() === 'PUT') {
+      saved = request.postDataJSON() as Record<string, unknown>;
+      config = { ...config, ...saved, has_token: !!saved.access_token };
+      return route.fulfill({ json: config });
+    }
+    if (request.method() === 'POST') {
+      testCount++;
+      return route.fulfill({ json: { sent: true } });
+    }
+    return route.fulfill({ json: config });
+  });
+  await page.goto('/settings');
+  const panel = page.locator('#notifications');
+  await panel.getByLabel('Enable usage reminders').check();
+  await panel.getByLabel('ntfy server URL').fill('https://ntfy.example');
+  await panel.getByLabel('Topic', { exact: true }).fill('drain-alerts');
+  await panel.getByLabel('Access token (optional)', { exact: true }).fill('fake-token');
+  await panel.getByRole('button', { name: 'Add usage reminder' }).click();
+  await panel.getByLabel('Reset within (hours)').fill('10');
+  await panel.getByLabel('At least this much allowance remaining (%)').fill('85');
+  await expect(panel.getByRole('button', { name: 'Send test notification' })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Save notifications' }).click();
+  await expect(panel.getByText('Notification settings saved.')).toBeVisible();
+  expect(saved).toMatchObject({
+    enabled: true,
+    server_url: 'https://ntfy.example',
+    topic: 'drain-alerts',
+    access_token: 'fake-token',
+    rules: [{ window_minutes: 10080, hours_before_reset: 10, min_remaining_percent: 85 }],
+  });
+  await expect(panel.getByLabel('Replace access token (optional)')).toHaveValue('');
+  await panel.getByRole('button', { name: 'Send test notification' }).click();
+  await expect(panel.getByText('Test notification sent.')).toBeVisible();
+  expect(testCount).toBe(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

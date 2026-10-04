@@ -76,6 +76,14 @@ Check `scope` identifies `daemon`, `helper`, or `mock` (local CLI diagnostics al
 
 Installation: `{id,account,permissions?:Record<string,string>}`. Repository: `{id,full_name,private?,default_branch?}`. ProjectGitHub is the PUT body.
 
+## Notifications
+
+- `GET /notifications/ntfy` → `{enabled,server_url,topic,rules,has_token,delivery:{last_sent_at?,last_checked_at?,last_error?}}`
+- `PUT /notifications/ntfy {enabled,server_url,topic,rules,access_token?,clear_token?}` saves the destination and reminder rules. Missing access token preserves it; `clear_token:true` deletes it. Responses never include token values.
+- `POST /notifications/ntfy/test` sends a test to the saved destination, including when reminders are disabled. Returns `{sent:true}` or a safe delivery error.
+
+A rule is `{id,enabled,window_minutes,limit_id?,hours_before_reset,min_remaining_percent}`. Defaults: generated ID, enabled, weekly (`10080` minutes), any limit ID, within `12` hours, at least `80`% remaining. Up to 20 rules are supported. Successful reminders are deduplicated per rule/destination/window/reset across restarts. See [notification behavior](../docs/notifications.md).
+
 ## Generic secrets
 
 - `GET /projects/{id}/secrets` → `Secret[]` (never values)

@@ -169,6 +169,10 @@ Back up the encryption key at `/var/lib/tokendrain-keys/master.key` with your ap
 
 Give it work. Let it chew through the usage you'd otherwise leave on the table.
 
+## Usage reminders
+
+Configure **Settings → Notifications** to send reminders through ntfy.sh or your own ntfy server. For example, get an alert when your weekly reset is within 12 hours and at least 80% of your allowance remains. Rules use the provider's observed windows, and reminders do not launch Runs. See [ntfy setup and delivery behavior](docs/notifications.md).
+
 ## The VM is the security boundary
 
 **Codex is intentionally unrestricted inside its project VM.** It has root and no command approval prompts. Any code in that guest can read the project's runtime secrets.

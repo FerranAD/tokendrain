@@ -1,4 +1,5 @@
 import { ThemeControl } from './theme';
+import { NotificationSettings } from './notifications';
 import { Icon } from './icons';
 import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
 import { UnsavedNotice, useUnsavedChanges } from './drafts';
@@ -14,12 +15,14 @@ export function SettingsPage() {
       <nav className="settings-nav" aria-label="Settings sections">
         <a href="#openai">Codex account</a>
         <a href="#github">GitHub</a>
+        <a href="#notifications">Notifications</a>
         <a href="#system">Execution defaults</a>
         <a href="#appearance">Appearance</a>
       </nav>
       <div className="settings-content">
         <OpenAISettings />
         <GitHubSettings />
+        <NotificationSettings />
         <SystemSettings />
         <section className="panel appearance-panel" id="appearance">
           <h2>Appearance</h2>
