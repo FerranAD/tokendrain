@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from tokendrain.auth.openai import AccountInfo, RuntimeCredentials
-from tokendrain.codex.rpc import RpcNotification
+from tokendrain.codex.rpc import RpcError, RpcNotification
 from tokendrain.domain import RunReport
 from tokendrain.orchestration.driver import GuestConnection, RealSessionFactory, ResumeRequired
 from tokendrain.vm.models import VmHandle
@@ -51,11 +51,17 @@ class Guest:
         self.requests: list[tuple[str, dict[str, Any]]] = []
         self.mode = mode
         self.runtime: dict[str, Any] = {}
+        self.loaded_threads: set[str] = set()
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         value = params or {}
         self.requests.append((method, value))
-        if method in {"thread/start", "thread/resume", "thread/read"}:
+        if method in {"thread/start", "thread/resume"}:
+            self.loaded_threads.add("thread")
+            return {"thread": {"id": "thread"}}
+        if method == "thread/read":
+            if value["threadId"] not in self.loaded_threads:
+                raise RpcError(-32600, "thread not loaded: " + value["threadId"])
             return {"thread": {"id": "thread"}}
         if method == "turn/start":
             if self.mode == "crash":
@@ -151,12 +157,30 @@ async def test_guest_failure_reconnects_reads_thread_and_never_replays_turn() ->
         await session.turn("Potential side effect", "", "medium", asyncio.Event())
     assert not any(method == "turn/start" for method, _ in second.requests)
     methods = [method for method, _ in second.requests]
-    assert methods.index("thread/read") < methods.index("thread/resume")
+    assert methods.index("thread/resume") < methods.index("thread/read")
     await session.turn(
         "Inspect current state before choosing new work", "", "medium", asyncio.Event()
     )
     turns = [params for method, params in second.requests if method == "turn/start"]
     assert len(turns) == 1 and "Inspect current state" in turns[0]["input"][0]["text"]
+    await session.close()
+
+
+async def test_saved_thread_is_loaded_before_reading_or_starting_work() -> None:
+    guest = Guest()
+
+    async def noop(*args: Any) -> None:
+        pass
+
+    session = await RealSessionFactory(Auth(), connector=Connector([guest])).connect(
+        VmHandle(execution_id="e", project_id="p", vsock_path=Path("/unused")), {}, noop, noop, noop
+    )
+    assert await session.initialize("thread", "") == "thread"
+    methods = [method for method, _ in guest.requests]
+    assert methods.index("thread/resume") < methods.index("thread/read")
+    assert "thread/start" not in methods and "turn/start" not in methods
+    report = await session.turn("Inspect existing work", "", "medium", asyncio.Event())
+    assert report.status == "completed"
     await session.close()
 
 

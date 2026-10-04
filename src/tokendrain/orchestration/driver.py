@@ -289,9 +289,11 @@ class RealSession:
                 raise ValueError("No connected OpenAI account")
             self.account_id = accounts[0].id
         await self.codex.initialize()
-        if thread_id:
-            await self.codex.read_thread(thread_id)
+        # A persisted ID is not necessarily loaded in this app-server process.
+        # Resume it before requesting its turns; neither operation starts model work.
         self.thread_id = await self.codex.start_thread(model or None, thread_id=thread_id)
+        if thread_id:
+            await self.codex.read_thread(self.thread_id)
         return self.thread_id
 
     async def usage(self) -> list[UsageWindow]:
@@ -349,9 +351,12 @@ class RealSession:
                 await self.guest.request("codex_start")
                 self.codex = CodexClient(self.guest)
                 await self.codex.initialize()
-                # Reading durable state must succeed before starting further work.
+                # Load the durable thread in the new process before reading its turns.
+                # Both must succeed before starting further work.
+                self.thread_id = await self.codex.start_thread(
+                    model or None, thread_id=self.thread_id
+                )
                 await self.codex.read_thread(self.thread_id)
-                await self.codex.start_thread(model or None, thread_id=self.thread_id)
                 self.runtime, self.github = runtime, github
                 await self.log(
                     "Codex restarted; durable thread inspected and resumed without replay."
