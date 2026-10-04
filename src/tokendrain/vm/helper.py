@@ -36,6 +36,7 @@ from .commands import CommandRunner, Runner
 from .models import VmHandle, VmSpec
 
 logger = logging.getLogger(__name__)
+WORKSPACE_WORKER = Path(__file__).resolve().parents[1] / "storage" / "export.py"
 
 
 class HelperConfig(BaseModel):
@@ -394,8 +395,10 @@ class InfrastructureService:
                 "--propagation",
                 "private",
                 sys.executable,
-                "-m",
-                "tokendrain.storage.export",
+                # Nix launchers add package paths only to the parent interpreter.
+                # The worker uses stdlib only; run its trusted installed script directly.
+                "-I",
+                str(WORKSPACE_WORKER),
                 str(disk_fd),
                 str(output_fd),
                 operation,
@@ -403,12 +406,24 @@ class InfrastructureService:
                 "1" if allow_large else "0",
                 pass_fds=(disk_fd, output_fd),
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
             async with asyncio.timeout(120):
-                stdout, _ = await process.communicate()
+                stdout, stderr = await process.communicate()
             if process.returncode:
-                raise RuntimeError("Read-only workspace export failed; inspect helper setup")
+                # Do not log arbitrary workspace contents or subprocess exception values.
+                logger.warning(
+                    "workspace_worker_failed",
+                    extra={
+                        "project_id": project_id,
+                        "operation": operation,
+                        "status": process.returncode,
+                        "reason": "module_unavailable"
+                        if b"ModuleNotFoundError" in stderr
+                        else "worker_failed",
+                    },
+                )
+                raise RuntimeError("Read-only workspace access failed; inspect helper logs")
             result = json.loads(stdout)
             if "error" in result:
                 os.unlink(name, dir_fd=directory_fd)

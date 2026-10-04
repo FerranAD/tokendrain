@@ -82,3 +82,47 @@ def test_workspace_browse_preview_download_and_bounded_reads(tmp_path: Path):
         file.truncate(HARD_PREVIEW_LIMIT + 1)
     with pytest.raises(ValueError, match="preview limit"):
         workspace_operation(root, output, "file", "large.log", True)
+
+
+async def test_workspace_worker_launch_does_not_require_parent_python_package_path(
+    tmp_path: Path, monkeypatch
+):
+    """Run the real isolated worker with stub mount tools, without root or a real VM."""
+    import asyncio
+    import json
+    import os
+    import pwd
+
+    from tokendrain.vm.helper import HelperConfig, InfrastructureService
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for command in ("mount", "umount"):
+        tool = tools / command
+        tool.write_text("#!/bin/sh\nexit 0\n")
+        tool.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tools))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    state = tmp_path / "state"
+    state.mkdir()
+    disk = tmp_path / "workspace.img"
+    disk.touch()
+    user = pwd.getpwuid(os.getuid()).pw_name
+    service = InfrastructureService(
+        HelperConfig(state_dir=state, guest_artifacts=tmp_path, daemon_user=user, vm_user=user)
+    )
+    monkeypatch.setattr(service, "_open_disk", lambda *_: os.open(disk, os.O_RDONLY))
+    launch = asyncio.create_subprocess_exec
+
+    async def private_namespace_stub(*args, **kwargs):
+        assert args[:4] == ("unshare", "--mount", "--propagation", "private")
+        assert args[5] == "-I"
+        assert Path(args[6]).name == "export.py"
+        # Only the namespace/mount operations are stubbed: Python and the worker are real.
+        return await launch(*args[4:], **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", private_namespace_stub)
+    result = await service.export_workspace("test", "tree")
+    output = state / "exports" / (result["export_id"] + ".json")
+    assert json.loads(output.read_text()) == {"path": "", "entries": []}
+    output.unlink()

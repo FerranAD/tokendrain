@@ -572,3 +572,22 @@ async def test_workspace_browser_and_downloads_are_project_scoped_and_idle_only(
         )
         assert response.status_code == 409
     assert not list((services.settings.state_dir / "exports").iterdir())
+
+
+async def test_workspace_helper_failure_returns_useful_error(api, monkeypatch):
+    from tokendrain.vm.firecracker import FirecrackerBackend
+
+    client, services = api
+    project = await new_project(client)
+    services.settings.backend = "firecracker"
+
+    async def failed_request(*args, **kwargs):
+        raise RuntimeError("Read-only workspace access failed; /private/host/path")
+
+    monkeypatch.setattr(FirecrackerBackend, "_request", failed_request)
+    response = await client.get(f"/api/v1/projects/{project}/workspace/tree")
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Workspace could not be opened. Check the tokendrain-helper logs."
+    )
+    assert "/private/host/path" not in response.text

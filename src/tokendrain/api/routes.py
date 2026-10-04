@@ -200,15 +200,20 @@ async def workspace_result(
         else:
             from tokendrain.vm.firecracker import FirecrackerBackend
 
-            result = await FirecrackerBackend(services.settings.helper_socket)._request(
-                "workspace_export",
-                {
-                    "project_id": project_id,
-                    "operation": operation,
-                    "path": path,
-                    "allow_large": allow_large,
-                },
-            )
+            try:
+                result = await FirecrackerBackend(services.settings.helper_socket)._request(
+                    "workspace_export",
+                    {
+                        "project_id": project_id,
+                        "operation": operation,
+                        "path": path,
+                        "allow_large": allow_large,
+                    },
+                )
+            except (RuntimeError, TimeoutError, OSError):
+                raise HTTPException(
+                    503, "Workspace could not be opened. Check the tokendrain-helper logs."
+                ) from None
             if "error" in result:
                 raise HTTPException(result.get("status", 400), result["error"])
             export_id = UUID(result["export_id"]).hex
