@@ -1,0 +1,75 @@
+site_name: tokendrain
+site_description: Persistent projects. Disposable VMs. Autonomous Codex work.
+repo_url: https://github.com/FerranAD/tokendrain
+repo_name: FerranAD/tokendrain
+docs_dir: docs
+site_dir: site
+strict: true
+use_directory_urls: true
+exclude_docs: |
+  task-*.md
+  RESUME.md
+theme:
+  name: material
+  custom_dir: docs/theme
+  font: false
+  logo: assets/tokendrain-logo-horizontal-dark.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+plugins:
+  - search
+hooks:
+  - docs/site_hooks.py
+extra_css:
+  - stylesheets/site.css
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+nav:
+  - Home: index.md
+  - Get started:
+      - Install & first Run: getting-started.md
+      - Projects & tasks: workflow.md
+      - Usage & stopping: usage-limits.md
+  - Operate:
+      - Operations: operations.md
+      - MicroVMs & storage: microvms.md
+      - Security & backups: security.md
+  - Connect:
+      - Codex account: openai-auth.md
+      - GitHub App: github-app.md
+  - Develop:
+      - Development guide: development.md
+      - Architecture: architecture.md
+      - Guest protocol: guest-protocol.md
+      - Web frontend: frontend.md
+      - API contract: api.md
+      - Documentation site: website.md
+copyright: MIT licensed · tokendrain contributors
