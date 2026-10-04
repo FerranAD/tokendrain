@@ -1,4 +1,5 @@
 site_name: tokendrain
+site_url: !ENV [TOKENDRAIN_DOCS_SITE_URL, 'https://ferranad.github.io/tokendrain/']
 site_description: Persistent projects. Disposable VMs. Autonomous Codex work.
 repo_url: https://github.com/FerranAD/tokendrain
 repo_name: FerranAD/tokendrain
