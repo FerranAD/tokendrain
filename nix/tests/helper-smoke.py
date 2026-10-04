@@ -6,8 +6,8 @@ import json
 import socket
 import struct
 import subprocess
-import tarfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -200,11 +200,23 @@ def main() -> None:
         helper("stop", {"execution_id": first["execution_id"]})
         handles.remove(first)
         exported = helper("workspace_export", {"project_id": first_project})
-        archive_path = Path("/var/lib/tokendrain/exports") / (exported["export_id"] + ".tar.gz")
-        with tarfile.open(archive_path) as archive:
-            sentinel = archive.extractfile("sentinel")
-            assert sentinel and sentinel.read() == b"workspace"
+        archive_path = Path("/var/lib/tokendrain/exports") / (exported["export_id"] + ".zip")
+        with zipfile.ZipFile(archive_path) as archive:
+            assert archive.read("sentinel") == b"workspace"
         archive_path.unlink()
+        for operation, suffix in [("tree", ".json"), ("file", ".bin")]:
+            payload = {"project_id": first_project, "operation": operation}
+            if operation == "file":
+                payload["path"] = "sentinel"
+            exported = helper("workspace_export", payload)
+            export_path = Path("/var/lib/tokendrain/exports") / (exported["export_id"] + suffix)
+            if operation == "tree":
+                assert "sentinel" in [
+                    entry["name"] for entry in json.loads(export_path.read_text())["entries"]
+                ]
+            else:
+                assert export_path.read_bytes() == b"workspace"
+            export_path.unlink()
         final, guest = boot(first_project)
         handles.append(final)
         assert guest.command("cat /workspace/sentinel /root/sentinel") == "workspaceenvironment"

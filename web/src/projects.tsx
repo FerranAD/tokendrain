@@ -1,3 +1,4 @@
+import { WorkspacePanel } from './workspace';
 import { Kanban } from './kanban';
 import { ModelSelector } from './model-selector';
 import { useState } from 'react';
@@ -394,7 +395,7 @@ export function ProjectPage({ id }: { id: string }) {
         </>
       )}
       {tab === 'Kanban' && <Kanban id={id} />}
-      {tab === 'Workspace' && <WorkspacePanel id={id} />}
+      {tab === 'Workspace' && <WorkspacePanel project={project} executions={history.data ?? []} />}
       {tab === 'Feedback' && (
         <ProjectEditor key={`${id}-feedback`} project={project} field="next_run_feedback" />
       )}
@@ -970,43 +971,5 @@ function SecretEditor({
         </button>
       </div>
     </form>
-  );
-}
-
-function WorkspacePanel({ id }: { id: string }) {
-  const action = useAction();
-  return (
-    <section className="panel">
-      <h2>Workspace</h2>
-      <p className="muted">
-        Download the current source files and generated work. Stop active Runs first. Symlinks and
-        special files are excluded.
-      </p>
-      <button
-        className="primary"
-        disabled={action.busy}
-        onClick={() => {
-          void action.run(async () => {
-            const response = await fetch(`/api/v1/projects/${id}/workspace/archive`, {
-              credentials: 'same-origin',
-              headers: { 'X-Tokendrain-Request': '1' },
-            });
-            if (!response.ok) {
-              const body = await response.json();
-              throw new Error(body.detail || 'Workspace download failed');
-            }
-            const url = URL.createObjectURL(await response.blob());
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `tokendrain-${id.slice(0, 8)}-workspace.tar.gz`;
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-          });
-        }}
-      >
-        {action.busy ? 'Preparing archive…' : 'Download workspace (.tar.gz)'}
-      </button>
-      <ActionNotice {...action} />
-    </section>
   );
 }

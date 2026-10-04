@@ -484,7 +484,7 @@ async def test_kanban_order_origin_and_agent_approval_boundary(api):
         )
     ).status_code == 409
     download = await client.get(f"/api/v1/projects/{project}/workspace/archive")
-    assert download.status_code == 200 and download.headers["content-type"] == "application/gzip"
+    assert download.status_code == 200 and download.headers["content-type"] == "application/zip"
     assert (
         await client.delete(f"/api/v1/projects/{project}/tasks/{backlog['id']}")
     ).status_code == 204
@@ -529,3 +529,46 @@ async def test_token_mode_requires_supplied_file(tmp_path):
             Settings(state_dir=tmp_path, backend="mock"), Overrides(start_workers=False)
         )
     assert not (tmp_path / "admin-token").exists()
+
+
+async def test_workspace_browser_and_downloads_are_project_scoped_and_idle_only(api):
+    import io
+    import zipfile
+    from uuid import UUID
+
+    client, services = api
+    project = await new_project(client)
+    root = services.settings.state_dir / "projects" / str(UUID(project)) / "mock-workspace"
+    (root / "src").mkdir(parents=True)
+    (root / "README.md").write_text("# Workspace\n")
+    (root / "src" / "main.py").write_text("print('hello')\n")
+    base = f"/api/v1/projects/{project}/workspace"
+    listing = await client.get(base + "/tree")
+    assert [entry["name"] for entry in listing.json()["entries"]] == ["src", "README.md"]
+    nested = await client.get(base + "/tree", params={"path": "src"})
+    assert nested.json()["entries"][0]["path"] == "src/main.py"
+    preview = await client.get(base + "/file", params={"path": "src/main.py"})
+    assert preview.text == "print('hello')\n"
+    download = await client.get(base + "/download", params={"path": "src/main.py"})
+    assert download.content == preview.content
+    assert "main.py" in download.headers["content-disposition"]
+    for path, expected in [
+        ("", {"src/", "src/main.py", "README.md"}),
+        ("src", {"src/", "src/main.py"}),
+    ]:
+        response = await client.get(base + "/archive", params={"path": path})
+        assert response.headers["content-type"] == "application/zip"
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            assert set(archive.namelist()) == expected
+    assert (await client.get(base + "/file", params={"path": "../../private"})).status_code == 409
+    other = await new_project(client, "Other workspace")
+    assert not (await client.get(f"/api/v1/projects/{other}/workspace/tree")).json()["entries"]
+    run = await client.post("/api/v1/runs", json={"projects": [{"project_id": project}]})
+    assert run.status_code == 201, run.text
+    for operation in ["tree", "file", "download", "archive"]:
+        response = await client.get(
+            base + "/" + operation,
+            params={"path": "src/main.py"} if operation in {"file", "download"} else {},
+        )
+        assert response.status_code == 409
+    assert not list((services.settings.state_dir / "exports").iterdir())

@@ -2,6 +2,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from functools import wraps
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -155,35 +156,116 @@ async def update_project(request: Request, project_id: str, body: ProjectPatch) 
     return encoded(await current(request).projects.patch(project_id, body))
 
 
-@router.get(API + "/projects/{project_id}/workspace/archive")
-async def workspace_archive(request: Request, project_id: str) -> Response:
+async def workspace_result(
+    request: Request, project_id: str, operation: str, path: str, allow_large: bool = False
+) -> tuple[Path, dict[str, Any]]:
+    from tokendrain.storage.export import workspace_operation, workspace_path
+
     services = current(request)
     ready(services)
+    path = workspace_path(path)
     await services.projects.require_idle(project_id)
+    suffix = {"tree": ".json", "archive": ".zip", "file": ".bin", "download": ".bin"}[operation]
     async with services.storage.lease(project_id):
         await services.projects.require_idle(project_id)
         if services.settings.backend == "mock":
-            import tarfile
+            # Test backend only: a project-scoped directory stands in for the offline disk.
+            from tokendrain.storage.files import durable_io
 
-            export_id = uuid4().hex
+            root = (
+                services.settings.state_dir / "projects" / str(UUID(project_id)) / "mock-workspace"
+            )
+            root.mkdir(parents=True, exist_ok=True)
             directory = services.settings.state_dir / "exports"
             directory.mkdir(mode=0o700, exist_ok=True)
-            path = directory / (export_id + ".tar.gz")
-            with tarfile.open(path, "w:gz"):
-                pass
+            destination = directory / (uuid4().hex + suffix)
+            try:
+                result = await durable_io(
+                    workspace_operation, root, destination, operation, path, allow_large
+                )
+            except FileNotFoundError:
+                destination.unlink(missing_ok=True)
+                raise HTTPException(404, "Workspace entry not found") from None
+            except (OSError, ValueError) as error:
+                destination.unlink(missing_ok=True)
+                message = (
+                    str(error)
+                    if isinstance(error, ValueError)
+                    else "Workspace entry is inaccessible"
+                )
+                raise HTTPException(413 if "preview limit" in message else 400, message) from None
+            except BaseException:
+                destination.unlink(missing_ok=True)
+                raise
         else:
             from tokendrain.vm.firecracker import FirecrackerBackend
 
             result = await FirecrackerBackend(services.settings.helper_socket)._request(
-                "workspace_export", {"project_id": project_id}
+                "workspace_export",
+                {
+                    "project_id": project_id,
+                    "operation": operation,
+                    "path": path,
+                    "allow_large": allow_large,
+                },
             )
+            if "error" in result:
+                raise HTTPException(result.get("status", 400), result["error"])
             export_id = UUID(result["export_id"]).hex
-            path = services.settings.state_dir / "exports" / (export_id + ".tar.gz")
+            destination = services.settings.state_dir / "exports" / (export_id + suffix)
+    return destination, result
+
+
+@router.get(API + "/projects/{project_id}/workspace/tree")
+async def workspace_tree(request: Request, project_id: str, path: str = "") -> Any:
+    destination, _ = await workspace_result(request, project_id, "tree", path)
+    try:
+        return json.loads(destination.read_text(encoding="utf-8"))
+    finally:
+        destination.unlink(missing_ok=True)
+
+
+@router.get(API + "/projects/{project_id}/workspace/file")
+@router.get(API + "/projects/{project_id}/workspace/download")
+async def workspace_file(
+    request: Request, project_id: str, path: str, allow_large: bool = False
+) -> Response:
+    operation = "download" if request.url.path.endswith("/download") else "file"
+    destination, result = await workspace_result(request, project_id, operation, path, allow_large)
+    # Never serve untrusted HTML/SVG as an executable same-origin document.
+    images = {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+        "image/bmp",
+        "image/x-icon",
+    }
+    media_type = (
+        result["mime_type"]
+        if operation == "file" and result["mime_type"] in images
+        else "application/octet-stream"
+        if operation == "download"
+        else "text/plain"
+    )
     return FileResponse(
-        path,
-        media_type="application/gzip",
-        filename=f"tokendrain-{UUID(project_id).hex[:8]}-workspace.tar.gz",
-        background=BackgroundTask(path.unlink, missing_ok=True),
+        destination,
+        media_type=media_type,
+        filename=path.rsplit("/", 1)[-1],
+        background=BackgroundTask(destination.unlink, missing_ok=True),
+    )
+
+
+@router.get(API + "/projects/{project_id}/workspace/archive")
+async def workspace_archive(request: Request, project_id: str, path: str = "") -> Response:
+    destination, _ = await workspace_result(request, project_id, "archive", path)
+    name = path.rsplit("/", 1)[-1] if path else f"tokendrain-{UUID(project_id).hex[:8]}-workspace"
+    return FileResponse(
+        destination,
+        media_type="application/zip",
+        filename=name + ".zip",
+        background=BackgroundTask(destination.unlink, missing_ok=True),
     )
 
 

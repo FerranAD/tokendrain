@@ -12,7 +12,7 @@ Control-plane access grants authority to configure projects, allocate resources,
 
 ## Isolation
 
-The web daemon runs as `tokendrain` without Linux capabilities and keeps systemd's `PrivateDevices` isolation. A separate privileged helper exposes only VM start, stop, list, read-only diagnostics, and project workspace export operations over a local Unix socket. It verifies peer credentials and accepts validated project/execution UUIDs plus bounded resource values. Requests cannot supply arbitrary host commands, filenames, mounts, or Firecracker configurations.
+The web daemon runs as `tokendrain` without Linux capabilities and keeps systemd's `PrivateDevices` isolation. A separate privileged helper exposes only VM start, stop, list, read-only diagnostics, and offline project workspace listing, preview, and download operations over a local Unix socket. It verifies peer credentials and accepts validated project/execution UUIDs plus bounded resource values. Requests cannot supply arbitrary host commands, filenames, mounts, or Firecracker configurations. Workspace operations accept only project IDs and validated workspace-relative paths, resolve path components without following symlinks, and reject active projects.
 
 System status checks application prerequisites in the daemon's own environment and obtains VM prerequisites through the helper's authenticated diagnostics operation. That operation inspects fixed resources; callers cannot select paths or commands. An unavailable helper is a failed check. KVM/TUN visibility and privileged networking executables are not requirements of the web daemon, and diagnostics do not grant it additional device access or capabilities.
 

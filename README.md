@@ -157,7 +157,7 @@ Before reconnecting/importing/disconnecting OpenAI, replacing the GitHub App key
 
 Execution defaults saved in Settings survive daemon restarts and take precedence over NixOS initial defaults. NixOS concurrency, CPU, and memory maxima still apply. Increasing the default disk size affects newly created projects; use a project's Environment controls to grow an existing disk.
 
-Each project's **Environment** tab provides snapshots, selective restore, environment reset, and offline disk growth. Automatic snapshots link to their Run. **Workspace** downloads the current files as `.tar.gz` while the project is idle. The privileged helper reads the selected disk in a read-only private mount namespace; symlinks and special files are omitted. Snapshots are disk copies, not RAM snapshots.
+Each project's **Environment** tab provides snapshots, selective restore, environment reset, and offline disk growth. Automatic snapshots link to their Run. **Workspace** provides a read-only file browser while the project is idle, with text/source, sanitized Markdown, and image previews. Download individual files, folders as ZIP, or the complete workspace as ZIP. Previews load automatically up to 2 MiB; larger files require confirmation and previews stop at 32 MiB. The privileged helper reads the selected disk in a read-only private mount namespace; symlinks and special files are omitted. Snapshots are disk copies, not RAM snapshots.
 
 After an unexpected restart, surviving VMs are stopped before project reservations are released. Interrupted active executions become failed with an explanation; queued work can resume. A new run inspects and continues preserved work without blindly replaying a side-effecting turn.
 

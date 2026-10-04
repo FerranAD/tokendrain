@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 
 const system = {
   version: '0.1.0',
@@ -687,4 +687,153 @@ test('Run preparation has no unsaved warning and dark controls show selection', 
     fullPage: true,
     animations: 'disabled',
   });
+});
+
+test('workspace browses lazily, sanitizes previews, gates large files, and works on mobile', async ({
+  page,
+}) => {
+  const { errors } = await fixture(page);
+  const requested: string[] = [];
+  const entry = (
+    name: string,
+    path: string,
+    kind = 'file',
+    size = 100,
+    mime_type = 'text/plain',
+  ) => ({
+    name,
+    path,
+    kind,
+    size: kind === 'directory' ? null : size,
+    mime_type,
+    modified_at: stamp,
+  });
+  const root = [
+    entry('src', 'src', 'directory'),
+    entry('README.md', 'README.md'),
+    entry('server.log', 'server.log', 'file', 3 * 1024 ** 2),
+    entry('huge.log', 'huge.log', 'file', 40 * 1024 ** 2),
+    entry('data.bin', 'data.bin', 'file', 1024, 'application/octet-stream'),
+    entry('pixel.png', 'pixel.png', 'file', 70, 'image/png'),
+  ];
+  const nested = [entry('main.py', 'src/main.py')];
+  const workspaceRoute = (route: Route) => {
+    const url = new URL(route.request().url());
+    const path = url.searchParams.get('path') || '';
+    const operation = url.pathname.split('/').pop();
+    requested.push(`${operation}:${path}`);
+    if (operation === 'tree')
+      return route.fulfill({ json: { path, entries: path === 'src' ? nested : root } });
+    if (operation === 'archive' || operation === 'download')
+      return route.fulfill({
+        body: 'download',
+        headers: {
+          'Content-Disposition': `attachment; filename="${operation === 'archive' ? 'workspace.zip' : 'main.py'}"`,
+        },
+      });
+    if (path === 'pixel.png')
+      return route.fulfill({
+        contentType: 'image/png',
+        body: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+          'base64',
+        ),
+      });
+    return route.fulfill({
+      contentType: 'text/plain',
+      body:
+        path === 'README.md'
+          ? '# Notes\n\n<script>window.workspaceInjected = true</script>\n\n<a href="javascript:alert(1)">Bad link</a><img src="x" onerror="alert(1)">'
+          : path === 'server.log'
+            ? 'Large log contents'
+            : "print('hello')\n",
+    });
+  };
+  await page.route('**/api/v1/projects/project-a/workspace/**', workspaceRoute);
+  await page.goto('/projects/project-a');
+  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  const files = page.getByRole('list', { name: 'Workspace files' });
+  await expect(files.getByRole('listitem')).toHaveCount(6);
+  expect([...new Set(requested)]).toEqual(['tree:']);
+  await page.getByLabel('Filter filenames').fill('readme');
+  await expect(files.getByRole('listitem')).toHaveCount(1);
+  await files.getByRole('button', { name: /README.md/ }).click();
+  await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
+  await expect(page.locator('.workspace-markdown script, .workspace-markdown img')).toHaveCount(0);
+  await expect(page.locator('.workspace-markdown a')).not.toHaveAttribute('href', /javascript/);
+  expect(await page.evaluate(() => 'workspaceInjected' in window)).toBe(false);
+  await page.getByRole('button', { name: 'Source', exact: true }).click();
+  await expect(page.locator('.workspace-code')).toContainText('# Notes');
+  await page.getByLabel('Filter filenames').fill('');
+  await files.getByRole('button', { name: /server.log/ }).click();
+  await expect(page.getByRole('heading', { name: 'Large file', exact: true })).toBeVisible();
+  expect(requested).not.toContain('file:server.log');
+  await page.getByRole('button', { name: 'Load anyway' }).click();
+  await expect(page.locator('.workspace-code')).toContainText('Large log contents');
+  await files.getByRole('button', { name: /huge.log/ }).click();
+  await expect(page.getByRole('heading', { name: 'Download only' })).toBeVisible();
+  expect(requested).not.toContain('file:huge.log');
+  await files.getByRole('button', { name: /data.bin/ }).click();
+  await expect(page.getByRole('heading', { name: 'Preview unavailable' })).toBeVisible();
+  expect(requested).not.toContain('file:data.bin');
+  await files.getByRole('button', { name: /pixel.png/ }).click();
+  await expect(page.getByRole('img', { name: 'pixel.png' })).toBeVisible();
+  expect(
+    await page
+      .getByRole('img', { name: 'pixel.png' })
+      .evaluate((element) => (element as HTMLImageElement).naturalWidth),
+  ).toBe(1);
+  await files.getByRole('button', { name: /src/ }).click();
+  await expect(files.getByRole('button', { name: /main.py/ })).toBeVisible();
+  await files.getByRole('button', { name: /main.py/ }).click();
+  await expect(page.locator('.workspace-code')).toContainText("print('hello')");
+  await expect(page.locator('.workspace-line-numbers')).toContainText('1');
+  await page.getByRole('button', { name: 'Line wrap' }).click();
+  await expect(page.locator('.workspace-code')).toHaveCSS('white-space', 'pre-wrap');
+  await expect(page.getByRole('link', { name: 'Download file', exact: true })).toHaveAttribute(
+    'href',
+    /\/download\?path=src%2Fmain\.py$/,
+  );
+  await expect(
+    page.getByRole('link', { name: 'Download folder as ZIP', exact: true }),
+  ).toHaveAttribute('href', /\/archive\?path=src$/);
+  await expect(
+    page.getByRole('link', { name: 'Download workspace as ZIP', exact: true }),
+  ).toHaveAttribute('href', /\/archive\?path=$/);
+  await page.screenshot({ path: 'test-results/workspace-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(files).toBeHidden();
+  await expect(page.locator('.workspace-code')).toBeVisible();
+  await page.screenshot({ path: 'test-results/workspace-mobile.png', fullPage: true });
+  await page.getByRole('button', { name: 'Back to files' }).click();
+  await expect(files).toBeVisible();
+  await page
+    .getByRole('navigation', { name: 'Workspace path' })
+    .getByRole('button', { name: 'Workspace', exact: true })
+    .click();
+  await expect(files.getByRole('listitem')).toHaveCount(6);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('active project workspace points to its Run without accessing files', async ({ page }) => {
+  await fixture(page);
+  await page.route('**/api/v1/projects/project-a/executions', (route) =>
+    route.fulfill({
+      json: [{ id: 'execution-1', project_id: 'project-a', run_id: 'run-1234', status: 'running' }],
+    }),
+  );
+  let workspaceRequests = 0;
+  await page.route('**/api/v1/projects/project-a/workspace/**', (route) => {
+    workspaceRequests++;
+    return route.abort();
+  });
+  await page.goto('/projects/project-a');
+  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Workspace currently in use' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Run', exact: true })).toHaveAttribute(
+    'href',
+    '/runs/run-1234',
+  );
+  expect(workspaceRequests).toBe(0);
 });

@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from tokendrain.doctor import inspect_vm_checks
 from tokendrain.logging import configure_logging
 from tokendrain.networking.linux import LinuxNetwork, NetworkAllocation, allocation
+from tokendrain.storage.export import workspace_path
 from tokendrain.storage.files import atomic_json, durable_io
 
 from .commands import CommandRunner, Runner
@@ -355,7 +356,9 @@ class InfrastructureService:
             await durable_io(shutil.rmtree, base)
         logger.info("vm_stopped", extra={"execution_id": key, "forced": forced})
 
-    async def export_workspace(self, project_id: str) -> dict[str, str]:
+    async def export_workspace(
+        self, project_id: str, operation: str = "archive", path: str = "", allow_large: bool = False
+    ) -> dict[str, Any]:
         """Pin both image and output descriptors before entering the worker namespace."""
         disk_fd = self._open_disk(project_id, "workspace")
         state_fd: int | None = None
@@ -363,7 +366,10 @@ class InfrastructureService:
         output_fd: int | None = None
         process: asyncio.subprocess.Process | None = None
         export_id = uuid4().hex
-        name = export_id + ".tar.gz"
+        name = (
+            export_id
+            + {"archive": ".zip", "tree": ".json", "file": ".bin", "download": ".bin"}[operation]
+        )
         try:
             state_fd = os.open(self.config.state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
@@ -392,16 +398,23 @@ class InfrastructureService:
                 "tokendrain.storage.export",
                 str(disk_fd),
                 str(output_fd),
+                operation,
+                path,
+                "1" if allow_large else "0",
                 pass_fds=(disk_fd, output_fd),
-                stdout=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
             async with asyncio.timeout(120):
-                await process.wait()
+                stdout, _ = await process.communicate()
             if process.returncode:
                 raise RuntimeError("Read-only workspace export failed; inspect helper setup")
+            result = json.loads(stdout)
+            if "error" in result:
+                os.unlink(name, dir_fd=directory_fd)
+                return dict(result)
             os.fsync(output_fd)
-            return {"export_id": export_id}
+            return {"export_id": export_id, **result}
         except BaseException:
             if process and process.returncode is None:
                 process.kill()
@@ -429,14 +442,25 @@ class InfrastructureService:
             return [check.model_dump(mode="json") for check in checks]
         async with self._lock:
             if request.operation == "workspace_export":
-                if set(request.payload) != {"project_id"}:
-                    raise ValueError("workspace_export accepts only project_id")
+                if (
+                    not {"project_id"}
+                    <= set(request.payload)
+                    <= {"project_id", "operation", "path", "allow_large"}
+                ):
+                    raise ValueError("Invalid workspace operation arguments")
+                operation = request.payload.get("operation", "archive")
+                if operation not in {"tree", "file", "download", "archive"}:
+                    raise ValueError("Unknown workspace operation")
+                path = workspace_path(request.payload.get("path", ""))
+                allow_large = request.payload.get("allow_large", False)
+                if not isinstance(allow_large, bool):
+                    raise ValueError("allow_large must be boolean")
                 project_id = str(UUID(str(request.payload["project_id"])))
                 if any(
                     str(UUID(record.spec.project_id)) == project_id for record in self.records()
                 ):
                     raise ValueError("Stop the project before downloading its workspace")
-                return await self.export_workspace(project_id)
+                return await self.export_workspace(project_id, operation, path, allow_large)
             if request.operation == "start":
                 return (await self.start(VmSpec.model_validate(request.payload))).model_dump(
                     mode="json"
