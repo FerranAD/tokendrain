@@ -1,8 +1,20 @@
 # tokendrain
 
-<img src="web/public/branding/tokendrain-logo-horizontal.png" alt="tokendrain" width="520" />
+<p align="center">
+  <img src="web/public/branding/tokendrain-logo-horizontal.png" alt="tokendrain" width="520" />
+</p>
 
-**Put your Codex allowance to work before it resets.**
+<p align="center">
+  <strong>Put your Codex allowance to work before it resets.</strong><br />
+  Persistent projects. Disposable, isolated runs. Your workspace is ready for the next one.
+</p>
+
+<p align="center">
+  <a href="#what-it-does">Features</a> ·
+  <a href="#install-on-nixos">Install</a> ·
+  <a href="docs/security.md">Security</a> ·
+  <a href="docs/development.md">Development</a>
+</p>
 
 Tokendrain is a self-hosted NixOS service that runs Codex autonomously inside Firecracker microVMs. Give a project a goal, choose a model and stopping conditions, and let it work. Its source tree, installed tools, Kanban board, and checkpoints remain available for the next run.
 
