@@ -150,11 +150,34 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
                 "permissions": {"contents": "write"},
             }
             denied = await client.put(f"/api/v1/projects/{project}/github", json=binding)
+            before = len((await client.get("/api/v1/projects")).json())
+            invalid_create = await client.post(
+                "/api/v1/projects", json={"name": "Denied integration", "github": binding}
+            )
+            assert invalid_create.status_code == 409, invalid_create.text
+            assert len((await client.get("/api/v1/projects")).json()) == before
             assert denied.status_code == 409 and "does not grant" in denied.text
             binding["permissions"] = {"contents": "read", "issues": "write"}
             attached = await client.put(f"/api/v1/projects/{project}/github", json=binding)
             assert attached.status_code == 200, attached.text
             assert attached.json()["permissions"] == binding["permissions"]
+            created = await client.post(
+                "/api/v1/projects",
+                json={
+                    "name": "Integrated from creation",
+                    "default_model": "codex-model",
+                    "default_reasoning_effort": "high",
+                    "github": binding,
+                    "initial_tasks": [{"title": "Approved task", "column": "todo"}],
+                },
+            )
+            assert created.status_code == 201, created.text
+            created_id = created.json()["id"]
+            assert created.json()["default_model"] == "codex-model"
+            initial_binding = (await client.get(f"/api/v1/projects/{created_id}/github")).json()
+            assert initial_binding["permissions"] == binding["permissions"]
+            tasks = (await client.get(f"/api/v1/projects/{created_id}/tasks")).json()
+            assert tasks[0]["title"] == "Approved task"
             # A new key for the same App must retain the explicit project grant.
             assert (
                 await client.put(

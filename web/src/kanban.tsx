@@ -1,3 +1,4 @@
+import { UnsavedNotice, useUnsavedChanges } from './drafts';
 import { useEffect, useState } from 'react';
 import { mutate, useAction, useResource } from './api';
 import type { Task, TaskColumn } from './types';
@@ -17,6 +18,12 @@ export function Kanban({ id }: { id: string }) {
   const [dragging, setDragging] = useState<string | null>(null);
   const [target, setTarget] = useState<{ column: TaskColumn; position: number } | null>(null);
   const action = useAction();
+  const draft = useUnsavedChanges(editing);
+  const openTask = (value: Partial<Task>) => {
+    if (!draft.discard()) return;
+    draft.markSaved(value);
+    setEditing(value);
+  };
   useEffect(() => {
     if (resource.data && !dragging) setTasks(resource.data);
   }, [resource.data]);
@@ -49,11 +56,12 @@ export function Kanban({ id }: { id: string }) {
     <>
       <div className="row between wrap">
         <p className="muted small">
-          Drag to move or reorder. Backlog needs your approval; agents work In progress, then Todo.
+          Moves save automatically. Drag to move or reorder. Backlog needs your approval; agents
+          work In progress, then Todo.
         </p>
         <button
           className="primary"
-          onClick={() => setEditing({ title: '', description: '', column: 'todo' })}
+          onClick={() => openTask({ title: '', description: '', column: 'todo' })}
         >
           + Add task
         </button>
@@ -68,6 +76,7 @@ export function Kanban({ id }: { id: string }) {
               e.preventDefault();
               void action.run(async () => {
                 await mutate(`/projects/${id}/tasks`, 'POST', [editing]);
+                draft.markSaved(null);
                 setEditing(null);
               });
             }}
@@ -104,11 +113,20 @@ export function Kanban({ id }: { id: string }) {
                 ))}
               </select>
             </label>
+            <UnsavedNotice dirty={draft.dirty} />
             <div className="row wrap">
               <button className="primary" disabled={action.busy}>
                 Save task
               </button>
-              <button type="button" onClick={() => setEditing(null)}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (draft.discard()) {
+                    draft.markSaved(null);
+                    setEditing(null);
+                  }
+                }}
+              >
                 Cancel
               </button>
               {editing.id && (
@@ -120,6 +138,7 @@ export function Kanban({ id }: { id: string }) {
                     if (window.confirm('Delete this task?'))
                       void action.run(async () => {
                         await mutate(`/projects/${id}/tasks/${editing.id}`, 'DELETE');
+                        draft.markSaved(null);
                         setEditing(null);
                       });
                   }}
@@ -200,7 +219,7 @@ export function Kanban({ id }: { id: string }) {
                     <button
                       className="quiet tiny"
                       onClick={() =>
-                        setEditing({
+                        openTask({
                           id: task.id,
                           title: task.title,
                           description: task.description,
@@ -221,7 +240,7 @@ export function Kanban({ id }: { id: string }) {
               )}
               <button
                 className="quiet small"
-                onClick={() => setEditing({ title: '', description: '', column: column.id })}
+                onClick={() => openTask({ title: '', description: '', column: column.id })}
               >
                 + Add task
               </button>

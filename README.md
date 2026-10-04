@@ -1,6 +1,10 @@
 # tokendrain
 
-<img src="web/public/branding/tokendrain-logo-horizontal.png" alt="tokendrain" width="520" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tokendrain-logo-horizontal-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/tokendrain-logo-horizontal.png">
+  <img alt="tokendrain" src="docs/assets/tokendrain-logo-horizontal.png" width="520">
+</picture>
 
 **Put your Codex allowance to work before it resets.**
 
@@ -115,9 +119,11 @@ Supply a raw 32-byte key or its URL-safe base64 encoding. Use a runtime **string
 
 ## First project
 
+Choose **Light**, **Dark**, or **System** under Appearance. Edited forms show an unsaved-changes notice and warn before navigation; save explicitly to apply them. Kanban drag/reorder changes save automatically.
+
 1. Open **Settings → OpenAI / Codex → Import Codex auth.json**. Upload/paste your Codex login file. Refresh stays managed by Codex on the host, so imported credentials work beyond their initial token expiry.
-2. Create a project with a title, description, and initial tasks. Choose Todo for approved work or Backlog for later review.
-3. Optionally attach a repository through your [GitHub App](docs/github-app.md) and add project secrets with explanations of their permitted use.
+2. Create a project with a title, description, initial tasks, and default model/reasoning effort. Choose Todo for approved work or Backlog for later review. You can attach a repository through your [GitHub App](docs/github-app.md) during creation.
+3. Add any project secrets with explanations of their permitted use. Model defaults and repository access can be changed later.
 4. Select **Prepare run**. Choose projects, models, reasoning effort, and stopping conditions. Start the run or save it as a schedule.
 5. Follow the activity timeline and checkpoints. Move/edit Kanban cards or leave feedback for the next run.
 6. Run again: `/workspace`, the persistent home, Nix profiles, installed tools, and caches are reused in a fresh VM.

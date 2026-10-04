@@ -55,6 +55,19 @@ async def test_cli_login_token_is_explicit_and_offline(settings: Settings) -> No
     assert output.getvalue().strip() == "administrative-test-token-only-123456789"
 
 
+async def test_cli_auth_none_omits_authorization_header(settings: Settings) -> None:
+    settings.auth_mode = "none"
+    settings.admin_token_file = None
+
+    def request(req: httpx.Request) -> httpx.Response:
+        assert "Authorization" not in req.headers
+        return httpx.Response(200, json=[])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as client:
+        result = await execute(parser().parse_args(["projects"]), settings, client, io.StringIO())
+        assert result == 0
+
+
 async def test_cli_auth_failure_does_not_echo_response_credentials(settings: Settings) -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(

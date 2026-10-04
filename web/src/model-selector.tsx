@@ -32,6 +32,7 @@ export function ModelSelector({
         {defaults ? 'Default model' : 'Model'}
         {models.data?.length ? (
           <select
+            aria-label={defaults ? 'Default model' : 'Model'}
             value={model}
             onChange={(e) => {
               const chosen = models.data?.find((m) => m.id === e.target.value);
@@ -68,6 +69,7 @@ export function ModelSelector({
       <label>
         {defaults ? 'Default reasoning effort' : 'Reasoning'}
         <select
+          aria-label={defaults ? 'Default reasoning effort' : 'Reasoning'}
           value={effort}
           onChange={(e) => onChange({ model, reasoning_effort: e.target.value })}
         >

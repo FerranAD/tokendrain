@@ -79,7 +79,7 @@ def local_url(settings: Settings) -> str:
 async def fetch(client: httpx.AsyncClient, url: str, token: str, resource: str) -> Any:
     response = await client.get(
         url.rstrip("/") + "/api/v1/" + resource,
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}"} if token else {},
         timeout=15,
     )
     if response.status_code == 401:

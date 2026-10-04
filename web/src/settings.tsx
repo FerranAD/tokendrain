@@ -1,7 +1,9 @@
+import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
+import { UnsavedNotice, useUnsavedChanges } from './drafts';
 import { useState } from 'react';
 import { mutate, useAction, useResource } from './api';
-import type { GitHubStatus, OpenAIStatus, ProjectGitHub, Repository, SystemInfo } from './types';
-import { ActionNotice, Badge, ErrorNotice, Link, Loading, PageTitle } from './ui';
+import type { GitHubStatus, OpenAIStatus, ProjectGitHub, SystemInfo } from './types';
+import { ActionNotice, Badge, ErrorNotice, Loading, PageTitle } from './ui';
 
 export function SettingsPage() {
   return (
@@ -23,6 +25,7 @@ function OpenAISettings() {
   const [authJson, setAuthJson] = useState('');
   const [importing, setImporting] = useState(true);
   const action = useAction();
+  const draft = useUnsavedChanges(authJson);
   return (
     <section className="panel" id="openai">
       <div className="row between">
@@ -52,7 +55,15 @@ function OpenAISettings() {
         </div>
       )}
       <div className="row wrap">
-        <button onClick={() => setImporting((value) => !value)}>
+        <button
+          onClick={() => {
+            if (draft.discard()) {
+              setAuthJson('');
+              draft.markSaved('');
+              setImporting((value) => !value);
+            }
+          }}
+        >
           {status.data?.connected ? 'Replace Codex auth.json' : 'Import Codex auth.json'}
         </button>
         {status.data?.connected && (
@@ -84,6 +95,7 @@ function OpenAISettings() {
                 throw new Error('Expected a Codex authentication JSON object.');
               await mutate('/auth/openai/import', 'POST', { auth_json: parsed });
               setAuthJson('');
+              draft.markSaved('');
               setImporting(false);
             }, 'Codex credentials imported.');
           }}
@@ -118,6 +130,7 @@ function OpenAISettings() {
               placeholder='{ "tokens": … }'
             />
           </label>
+          <UnsavedNotice dirty={draft.dirty} />
           <button disabled={action.busy || !authJson}>Import credentials</button>
         </form>
       )}
@@ -135,6 +148,7 @@ function GitHubSettings() {
   const [slug, setSlug] = useState('');
   const [key, setKey] = useState('');
   const [editing, setEditing] = useState(false);
+  const draft = useUnsavedChanges({ appId, slug, key });
   const action = useAction();
   const origin = window.location.origin;
   return (
@@ -245,6 +259,13 @@ function GitHubSettings() {
               <button
                 className="quiet"
                 onClick={() => {
+                  if (editing && !draft.discard()) return;
+                  draft.markSaved({
+                    appId: String(status.data?.app_id ?? ''),
+                    slug: status.data?.app_slug ?? '',
+                    key: '',
+                  });
+                  setKey('');
                   setAppId(String(status.data?.app_id ?? ''));
                   setSlug(status.data?.app_slug ?? '');
                   setEditing((value) => !value);
@@ -281,6 +302,7 @@ function GitHubSettings() {
                 app_slug: slug,
                 private_key: key,
               });
+              draft.markSaved({ appId, slug, key: '' });
               setKey('');
               setEditing(false);
             }, 'GitHub App configured. Install it and refresh installations.');
@@ -333,6 +355,7 @@ function GitHubSettings() {
               placeholder="-----BEGIN RSA PRIVATE KEY-----"
             />
           </label>
+          <UnsavedNotice dirty={draft.dirty} />
           <button className="primary" disabled={action.busy}>
             Save GitHub App
           </button>
@@ -412,19 +435,19 @@ function SystemForm({ system }: { system: SystemInfo }) {
   const [memory, setMemory] = useState(system.vm_defaults.memory_mib);
   const [disk, setDisk] = useState(system.vm_defaults.disk_gib);
   const action = useAction();
+  const draft = useUnsavedChanges({ concurrency, vcpus, memory, disk });
   return (
     <form
       className="inset"
       onSubmit={(e) => {
         e.preventDefault();
-        void action.run(
-          () =>
-            mutate('/system', 'PATCH', {
-              concurrency,
-              vm_defaults: { vcpus, memory_mib: memory, disk_gib: disk },
-            }),
-          'Execution defaults saved.',
-        );
+        void action.run(async () => {
+          await mutate('/system', 'PATCH', {
+            concurrency,
+            vm_defaults: { vcpus, memory_mib: memory, disk_gib: disk },
+          });
+          draft.markSaved();
+        }, 'Execution defaults saved.');
       }}
     >
       <div className="form-grid four">
@@ -478,200 +501,75 @@ function SystemForm({ system }: { system: SystemInfo }) {
         Leave host memory available beyond concurrency × VM memory. Disk defaults apply to newly
         created project storage.
       </p>
-      <ActionNotice {...action} />
-      <button disabled={action.busy}>Save defaults</button>
+      <UnsavedNotice dirty={draft.dirty} />
+      <ActionNotice {...action} notice={draft.dirty ? undefined : action.notice} />
+      <button disabled={action.busy || !draft.dirty}>Save defaults</button>
     </form>
   );
 }
 
-const permissionNames: Record<string, string> = {
-  contents: 'Repository contents',
-  pull_requests: 'Pull requests',
-  issues: 'Issues',
-  actions: 'Actions',
-};
-
 export function ProjectGitHubPanel({ id }: { id: string }) {
-  const status = useResource<GitHubStatus>('/integrations/github');
-  const integration = useResource<ProjectGitHub | null>(`/projects/${id}/github`);
-  const [installationId, setInstallationId] = useState('');
-  const [repositoryId, setRepositoryId] = useState('');
-  const [repositoryQuery, setRepositoryQuery] = useState<string | null>(null);
-  const [permissions, setPermissions] = useState<Record<string, string>>({ contents: 'read' });
-  const [initialized, setInitialized] = useState(false);
-  const repositories = useResource<Repository[]>(
-    installationId ? `/integrations/github/installations/${installationId}/repositories` : null,
-  );
-  const action = useAction();
-  if (!initialized && integration.data !== undefined) {
-    setInitialized(true);
-    if (integration.data) {
-      setInstallationId(String(integration.data.installation_id));
-      setRepositoryId(String(integration.data.repository_id));
-      setPermissions(integration.data.permissions);
-    }
-  }
-  const installation = status.data?.installations.find(
-    (item) => String(item.id) === installationId,
-  );
+  const resource = useResource<ProjectGitHub | null>(`/projects/${id}/github`);
   return (
     <section className="panel">
       <h2>GitHub repository</h2>
-      <p className="muted">
-        Select one repository and the capabilities this project needs. The selected permissions
-        authorize the agent to act autonomously.
-      </p>
-      <ErrorNotice error={status.error || integration.error} />
-      {!status.data ? (
+      <p className="muted">Select a repository and the capabilities this project needs.</p>
+      <ErrorNotice error={resource.error} />
+      {resource.data === undefined ? (
         <Loading />
-      ) : !status.data.configured ? (
-        <div className="callout">
-          <p>Configure your GitHub App before attaching a repository.</p>
-          <Link className="button" href="/settings">
-            Open GitHub settings →
-          </Link>
-        </div>
       ) : (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void action.run(() => {
-              const repository = repositories.data?.find(
-                (item) => String(item.id) === repositoryId,
-              );
-              if (!repository) throw new Error('Choose an available repository.');
-              return mutate(`/projects/${id}/github`, 'PUT', {
-                installation_id: installationId,
-                repository_id: Number(repositoryId),
-                repository_name: repository?.full_name ?? integration.data?.repository_name,
-                permissions: Object.fromEntries(
-                  Object.entries(permissions).filter(([, value]) => value),
-                ),
-              });
-            }, 'Repository integration saved.');
-          }}
-        >
-          <div className="form-grid">
-            <label>
-              Installation
-              <select
-                required
-                value={installationId}
-                onChange={(e) => {
-                  setInstallationId(e.target.value);
-                  setRepositoryId('');
-                  setRepositoryQuery('');
-                  setPermissions({ contents: 'read' });
-                }}
-              >
-                <option value="">Select an account or organization</option>
-                {status.data.installations.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.account}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Repository
-              <input
-                role="combobox"
-                aria-autocomplete="list"
-                list="github-repositories"
-                disabled={!installationId || repositories.loading}
-                value={
-                  (repositoryQuery ??
-                    repositories.data?.find((r) => String(r.id) === repositoryId)?.full_name ??
-                    integration.data?.repository_name) ||
-                  ''
-                }
-                placeholder="Search repositories…"
-                required
-                onChange={(e) => {
-                  setRepositoryQuery(e.target.value);
-                  setRepositoryId(
-                    String(
-                      repositories.data?.find((r) => r.full_name === e.target.value)?.id || '',
-                    ),
-                  );
-                }}
-              />
-              <datalist id="github-repositories">
-                {repositories.data?.map((r) => (
-                  <option key={r.id} value={r.full_name} />
-                ))}
-              </datalist>
-            </label>
-          </div>
-          <ErrorNotice error={repositories.error} />
-          {!status.data.installations.length && (
-            <p className="small muted">
-              No installations available. Install your app and refresh its installations in{' '}
-              <Link href="/settings">Settings</Link>.
-            </p>
-          )}
-          <h3>Allowed capabilities</h3>
-          <p className="small muted">
-            The app’s installation permissions are the maximum. GitHub verifies the narrower
-            permissions when a token is issued.
-          </p>
-          <div className="permissions">
-            {Object.entries(permissionNames).map(([key, label]) => {
-              const maximum = installation?.permissions?.[key];
-              const known = !!installation?.permissions;
-              const canRead =
-                !known || maximum === 'read' || maximum === 'write' || maximum === 'admin';
-              const canWrite =
-                key !== 'actions' && (!known || maximum === 'write' || maximum === 'admin');
-              return (
-                <label key={key}>
-                  {label}
-                  <select
-                    value={permissions[key] ?? ''}
-                    onChange={(e) => setPermissions((old) => ({ ...old, [key]: e.target.value }))}
-                  >
-                    <option value="">No access</option>
-                    {canRead && <option value="read">Read</option>}
-                    {canWrite && <option value="write">Read & write</option>}
-                  </select>
-                </label>
-              );
-            })}
-          </div>
-          {permissions.pull_requests === 'write' && permissions.contents !== 'write' && (
-            <div className="notice warning" role="alert">
-              This project can create pull requests, but it has nowhere to publish the source
-              branch. Give the target repository Contents write access.
-            </div>
-          )}
-          <ActionNotice {...action} />
-          <div className="form-actions">
-            {integration.data && (
-              <button
-                type="button"
-                className="danger"
-                disabled={action.busy}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      'Disconnect this repository from future runs? Workspace files will remain.',
-                    )
-                  )
-                    void action.run(async () => {
-                      await mutate(`/projects/${id}/github`, 'DELETE');
-                      setRepositoryId('');
-                    }, 'Repository disconnected.');
-                }}
-              >
-                Disconnect
-              </button>
-            )}
-            <button className="primary" disabled={action.busy || !repositoryId || !installationId}>
-              Save repository access
-            </button>
-          </div>
-        </form>
+        <GitHubEditor key={id} id={id} initial={resource.data} />
       )}
     </section>
+  );
+}
+
+function GitHubEditor({ id, initial }: { id: string; initial: ProjectGitHub | null }) {
+  const [value, setValue] = useState(initial || emptyGitHub);
+  const [connected, setConnected] = useState(!!initial);
+  const draft = useUnsavedChanges(value);
+  const action = useAction();
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void action.run(async () => {
+          await mutate(`/projects/${id}/github`, 'PUT', githubPayload(value));
+          draft.markSaved();
+          setConnected(true);
+        }, 'Repository integration saved.');
+      }}
+    >
+      <GitHubFields value={value} onChange={setValue} />
+      <UnsavedNotice dirty={draft.dirty} />
+      <ActionNotice {...action} notice={draft.dirty ? undefined : action.notice} />
+      <div className="form-actions">
+        {connected && (
+          <button
+            type="button"
+            className="danger"
+            disabled={action.busy}
+            onClick={() => {
+              if (
+                window.confirm(
+                  'Disconnect this repository from future runs? Workspace files will remain.',
+                )
+              )
+                void action.run(async () => {
+                  await mutate(`/projects/${id}/github`, 'DELETE');
+                  setValue(emptyGitHub);
+                  setConnected(false);
+                  draft.markSaved(emptyGitHub);
+                }, 'Repository disconnected.');
+            }}
+          >
+            Disconnect
+          </button>
+        )}
+        <button className="primary" disabled={action.busy || !draft.dirty || !value.repository_id}>
+          Save repository access
+        </button>
+      </div>
+    </form>
   );
 }

@@ -9,7 +9,7 @@ Authentication: `POST /session {token}` establishes a same-origin HttpOnly cooki
 ## Projects
 
 - `GET /projects` → `Project[]`
-- `POST /projects {name,description,default_model?,default_reasoning_effort?,initial_tasks?:[{title,description,column}]}`
+- `POST /projects {name,description,default_model?,default_reasoning_effort?,initial_tasks?:[{title,description,column}],github?:{installation_id,repository_id,repository_name,permissions}}` validates and saves optional GitHub access together with the project.
 - `GET /projects/{id}` → `Project`
 - `PATCH /projects/{id}` accepts `name,description,next_run_feedback,default_model,default_reasoning_effort`
 - `DELETE /projects/{id}` rejects active projects

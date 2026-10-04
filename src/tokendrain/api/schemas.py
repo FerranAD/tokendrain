@@ -2,7 +2,12 @@ from typing import Any, Literal
 
 from pydantic import Field, SecretStr
 
-from tokendrain.domain import Boundary
+from tokendrain.domain import Boundary, ProjectCreate
+from tokendrain.github.provider import IntegrationInput
+
+
+class ProjectCreateInput(ProjectCreate):
+    github: IntegrationInput | None = None
 
 
 class LoginInput(Boundary):

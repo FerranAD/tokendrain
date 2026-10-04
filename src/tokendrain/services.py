@@ -12,8 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tokendrain.db.models import (
     Event,
+    GitHubApp,
+    GitHubInstallation,
     Project,
     ProjectExecution,
+    ProjectGitHub,
     ProjectSnapshot,
     ProjectTask,
     Report,
@@ -35,11 +38,31 @@ from tokendrain.domain import (
     validate_transition,
 )
 from tokendrain.events import EventBus
+from tokendrain.github.provider import IntegrationInput
 from tokendrain.storage.files import ProjectStorage
 
 
 def columns(row: Any) -> dict[str, Any]:
     return {column.name: getattr(row, column.name) for column in row.__table__.columns}
+
+
+async def validate_github_access(
+    db: AsyncSession, integration: IntegrationInput, credential_ref: str | None
+) -> None:
+    app = await db.get(GitHubApp, 1)
+    if (
+        await db.get(Setting, "provider_change")
+        or app is None
+        or app.credential_ref != credential_ref
+    ):
+        raise ValueError("GitHub configuration changed; reload repositories and retry")
+    installation = await db.get(GitHubInstallation, integration.installation_id)
+    if installation is None:
+        raise ValueError("Installation changed; sync GitHub and reload repositories")
+    for permission, requested in integration.permissions.items():
+        maximum = installation.permissions.get(permission, "none")
+        if maximum == "none" or (requested == "write" and maximum != "write"):
+            raise ValueError(f"Installation does not grant {permission}:{requested}")
 
 
 async def valid_checkpoint(
@@ -112,25 +135,42 @@ class ProjectService:
     ) -> None:
         self.sessions, self.storage, self.events = sessions, storage, events
 
-    async def create(self, values: ProjectCreate) -> str:
+    async def create(
+        self,
+        values: ProjectCreate,
+        github: IntegrationInput | None = None,
+        github_credential_ref: str | None = None,
+    ) -> str:
         project_id = new_id()
         storage = await self.storage.create(project_id)
-        async with self.sessions.begin() as db:
-            db.add(
-                Project(
-                    id=project_id,
-                    **values.model_dump(exclude={"initial_tasks"}),
-                    environment_metadata={"size_bytes": storage.environment_bytes},
-                    workspace_metadata={"size_bytes": storage.workspace_bytes},
-                )
-            )
-            await db.flush()
-            for position, task in enumerate(values.initial_tasks):
+        try:
+            async with self.sessions.begin() as db:
+                await db.execute(text("BEGIN IMMEDIATE"))
+                if github:
+                    await validate_github_access(db, github, github_credential_ref)
                 db.add(
-                    ProjectTask(
-                        project_id=project_id, position=position, origin="user", **task.model_dump()
+                    Project(
+                        id=project_id,
+                        **values.model_dump(exclude={"initial_tasks"}),
+                        environment_metadata={"size_bytes": storage.environment_bytes},
+                        workspace_metadata={"size_bytes": storage.workspace_bytes},
                     )
                 )
+                await db.flush()
+                if github:
+                    db.add(ProjectGitHub(project_id=project_id, **github.model_dump()))
+                for position, task in enumerate(values.initial_tasks):
+                    db.add(
+                        ProjectTask(
+                            project_id=project_id,
+                            position=position,
+                            origin="user",
+                            **task.model_dump(),
+                        )
+                    )
+        except BaseException:
+            await self.storage.delete_project(project_id)
+            raise
         await self.events.publish("project.created", project_id=project_id)
         return project_id
 

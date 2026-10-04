@@ -171,6 +171,8 @@ test('dashboard renders provider metadata and creates a persistent project', asy
     name: 'Useful project',
     description: 'Build something useful and test it.',
     initial_tasks: [],
+    default_model: '',
+    default_reasoning_effort: 'medium',
   });
   expect(errors).toEqual([]);
 });
@@ -525,4 +527,94 @@ test('Activity uses structured commands and filters persisted and live projects'
   await expect(page.getByRole('log')).toContainText('GitHub rejected push (HTTP 403)');
   await page.screenshot({ path: 'test-results/activity.png', fullPage: true });
   expect(errors).toEqual([]);
+});
+
+test('appearance follows system and persists an explicit theme', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await fixture(page);
+  await page.goto('/');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('.logo-dark').first()).toBeVisible();
+  await page.getByLabel('Appearance', { exact: true }).selectOption('light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.getByLabel('Appearance', { exact: true }).selectOption('dark');
+  await page.screenshot({
+    path: 'test-results/dashboard-dark.png',
+    fullPage: true,
+    animations: 'disabled',
+  });
+  await page.goto('/prepare?project=project-a');
+  const radio = page.getByRole('radio', { name: /Graceful stop/ });
+  const size = await radio.boundingBox();
+  expect(size?.width).toBeLessThanOrEqual(18);
+  expect(size?.height).toBeLessThanOrEqual(18);
+  await page.screenshot({
+    path: 'test-results/prepare-dark.png',
+    fullPage: true,
+    animations: 'disabled',
+  });
+  await page.getByLabel('Appearance', { exact: true }).selectOption('system');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('unsaved changes warn on tabs and navigation and clear after saving', async ({ page }) => {
+  await fixture(page);
+  await page.goto('/projects/project-a');
+  await page.getByRole('button', { name: 'Description', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  await page.getByLabel('Project description', { exact: true }).fill('Unsaved description');
+  await expect(page.getByText('Unsaved changes', { exact: true })).toBeVisible();
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.getByRole('button', { name: 'Next run feedback', exact: true }).click();
+  await expect(page.getByLabel('Project description', { exact: true })).toHaveValue(
+    'Unsaved description',
+  );
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
+  await expect(page).toHaveURL(/projects\/project-a$/);
+  await page.route('**/api/v1/projects/project-a', (route) =>
+    route.request().method() === 'PATCH'
+      ? route.fulfill({ status: 409, json: { detail: 'Save failed. Try again.' } })
+      : route.fallback(),
+  );
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByRole('alert')).toContainText('Save failed');
+  await expect(page.getByText('Unsaved changes', { exact: true })).toBeVisible();
+  await page.unroute('**/api/v1/projects/project-a');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByText('Changes saved.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Unsaved changes', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Next run feedback', exact: true }).click();
+  await expect(page.getByLabel('Feedback for the next run', { exact: true })).toBeVisible();
+});
+
+test('project creation saves the model and GitHub integration together', async ({ page }) => {
+  const { writes } = await fixture(page);
+  await page.goto('/projects');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByLabel('Project name', { exact: true }).fill('Integrated project');
+  await page.getByLabel('What should the agent achieve?').fill('Complete approved work.');
+  await page.getByLabel('Default model', { exact: true }).selectOption('codex-other');
+  await page.getByLabel('Default reasoning effort', { exact: true }).selectOption('high');
+  await page.getByRole('checkbox', { name: 'Attach a GitHub repository' }).check();
+  await page.getByLabel('Installation', { exact: true }).selectOption('123');
+  await page.getByRole('combobox', { name: 'Repository', exact: true }).fill('octocat/telescope');
+  await page.getByLabel('Repository contents', { exact: true }).selectOption('write');
+  await page.getByLabel('Pull requests', { exact: true }).selectOption('write');
+  await page.screenshot({ path: 'test-results/create-project.png', fullPage: true });
+  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await expect(page).toHaveURL(/projects\/new-project$/);
+  expect(writes.find((w) => w.path === '/projects')?.body).toMatchObject({
+    default_model: 'codex-other',
+    default_reasoning_effort: 'high',
+    github: {
+      installation_id: '123',
+      repository_id: 55,
+      repository_name: 'octocat/telescope',
+      permissions: { contents: 'write', pull_requests: 'write' },
+    },
+  });
 });

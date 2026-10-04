@@ -17,6 +17,8 @@ import {
   UsageCards,
 } from './ui';
 import './style.css';
+import { ThemeControl } from './theme';
+import { confirmDiscardChanges } from './drafts';
 
 function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -24,6 +26,7 @@ function App() {
   const [attempt, setAttempt] = useState(0);
   const [path, setPath] = useState(window.location.pathname + window.location.search);
   const go = useCallback((next: string) => {
+    if (!confirmDiscardChanges()) return;
     window.history.pushState(null, '', next);
     setPath(next);
     window.scrollTo(0, 0);
@@ -43,7 +46,10 @@ function App() {
     return () => controller.abort();
   }, [attempt]);
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname + window.location.search);
+    const onPop = () => {
+      if (confirmDiscardChanges()) setPath(window.location.pathname + window.location.search);
+      else window.history.pushState(null, '', path);
+    };
     const unauthorized = () => setAuthenticated(false);
     window.addEventListener('popstate', onPop);
     window.addEventListener('tokendrain:unauthorized', unauthorized);
@@ -51,7 +57,7 @@ function App() {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('tokendrain:unauthorized', unauthorized);
     };
-  }, []);
+  }, [path]);
   if (authenticated === null)
     return (
       <div className="login-page">
@@ -89,10 +95,16 @@ function App() {
 function Brand() {
   return (
     <span className="brand">
-      <img src="/branding/tokendrain-mascot-only.png" alt="" className="brand-logo" />
-      <span>
-        tokendrain<span className="brand-period">.</span>
-      </span>
+      <img
+        src="/branding/tokendrain-logo-horizontal.png"
+        alt="tokendrain"
+        className="brand-lockup logo-light"
+      />
+      <img
+        src="/branding/tokendrain-logo-horizontal-dark.png"
+        alt="tokendrain"
+        className="brand-lockup logo-dark"
+      />
     </span>
   );
 }
@@ -133,6 +145,7 @@ function Login({ onAuthenticated }: { onAuthenticated: () => void }) {
           </button>
         </form>
         <p className="tiny muted">Use the administration token configured on your host.</p>
+        <ThemeControl />
       </div>
     </div>
   );
@@ -242,11 +255,13 @@ function Shell({ path, onSignOut }: { path: string; onSignOut: () => void }) {
           })}
         </nav>
         <div className="sidebar-bottom">
+          <ThemeControl />
           {session.data?.auth_mode === 'token' && (
             <button
               className="sidebar-button"
               disabled={action.busy}
               onClick={() => {
+                if (!confirmDiscardChanges()) return;
                 void action.run(async () => {
                   await mutate('/session', 'DELETE');
                   onSignOut();

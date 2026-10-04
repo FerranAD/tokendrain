@@ -24,6 +24,7 @@ async def test_daemon_and_admin_client_stop_cleanly(tmp_path: Path) -> None:
     }
     environment.update(
         TOKENDRAIN_BACKEND="mock",
+        TOKENDRAIN_AUTH_MODE="token",
         TOKENDRAIN_STATE_DIR=str(tmp_path),
         TOKENDRAIN_PORT=str(port),
         TOKENDRAIN_PUBLIC_URL=url,

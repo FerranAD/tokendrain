@@ -1,4 +1,5 @@
 import { ModelSelector } from './model-selector';
+import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
 import { ActivityTimeline } from './activity';
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -125,10 +126,12 @@ export function PrepareRunPage({ selectedProject }: { selectedProject?: string }
       />
       <RunBuilder
         selectedProject={selectedProject}
+        draftContext={{ mode, name, cron, timezone }}
         submitLabel={mode === 'run' ? 'Start run' : 'Create schedule'}
-        onSubmit={async (template) => {
+        onSubmit={async (template, saved) => {
           if (mode === 'run') {
             const result = await mutate<Run>('/runs', 'POST', template);
+            saved();
             go(`/runs/${result.id}`);
           } else {
             await mutate('/schedules', 'POST', {
@@ -138,6 +141,7 @@ export function PrepareRunPage({ selectedProject }: { selectedProject?: string }
               enabled: true,
               run_template: template,
             });
+            saved();
             go('/schedules');
           }
         }}
@@ -194,12 +198,14 @@ export function RunBuilder({
   children,
   onSubmit,
   submitLabel = 'Save',
+  draftContext,
 }: {
   initial?: RunTemplate;
   selectedProject?: string;
   children?: ReactNode;
-  onSubmit: (template: RunTemplate) => Promise<void>;
+  onSubmit: (template: RunTemplate, saved: () => void) => Promise<void>;
   submitLabel?: string;
+  draftContext?: unknown;
 }) {
   const projects = useResource<Project[]>('/projects');
   const usage = useResource<UsageWindow[]>('/usage');
@@ -213,18 +219,22 @@ export function RunBuilder({
   const [parallel, setParallel] = useState(initial?.parallel ?? true);
   const [initialized, setInitialized] = useState(false);
   const action = useAction();
+  const draft = useUnsavedChanges({ configs, conditions, thresholdMode, parallel, draftContext });
   // Apply the URL selection once after projects arrive without resetting edits on live updates.
   if (!initialized && projects.data) {
     setInitialized(true);
     const project = projects.data.find((item) => item.id === selectedProject);
-    if (!initial && project)
-      setConfigs([
+    if (!initial && project) {
+      const selected = [
         {
           project_id: project.id,
           model: project.default_model || '',
           reasoning_effort: project.default_reasoning_effort || '',
         },
-      ]);
+      ];
+      setConfigs(selected);
+      draft.markSaved({ configs: selected, conditions, thresholdMode, parallel, draftContext });
+    }
   }
   const toggleProject = (project: Project, checked: boolean) =>
     setConfigs((old) =>
@@ -259,15 +269,18 @@ export function RunBuilder({
         e.preventDefault();
         if (configs.length && conditions.length)
           void action.run(() =>
-            onSubmit({
-              projects: configs.map((config) => ({
-                ...config,
-                reasoning_effort: config.reasoning_effort || 'medium',
-              })),
-              stop_conditions: conditions,
-              parallel,
-              threshold_mode: thresholdMode,
-            }),
+            onSubmit(
+              {
+                projects: configs.map((config) => ({
+                  ...config,
+                  reasoning_effort: config.reasoning_effort || 'medium',
+                })),
+                stop_conditions: conditions,
+                parallel,
+                threshold_mode: thresholdMode,
+              },
+              () => draft.markSaved(),
+            ),
           );
       }}
     >
@@ -514,6 +527,7 @@ export function RunBuilder({
         </label>
       </section>
       {children}
+      <UnsavedNotice dirty={draft.dirty} />
       <ActionNotice {...action} />
       <div className="run-submit">
         <p className="small muted">
@@ -856,22 +870,32 @@ function ScheduleEditor({ schedule, close }: { schedule: Schedule; close: () => 
   const [name, setName] = useState(schedule.name);
   const [cron, setCron] = useState(schedule.cron);
   const [timezone, setTimezone] = useState(schedule.timezone);
+  const timing = useUnsavedChanges({ name, cron, timezone });
   return (
     <>
       <div className="row between">
         <h2>Edit {schedule.name}</h2>
-        <button onClick={close}>Close editor</button>
+        <button
+          onClick={() => {
+            if (confirmDiscardChanges()) close();
+          }}
+        >
+          Close editor
+        </button>
       </div>
       <RunBuilder
         initial={schedule.run_template}
+        draftContext={{ name, cron, timezone }}
         submitLabel="Save schedule"
-        onSubmit={async (template) => {
+        onSubmit={async (template, saved) => {
           await mutate(`/schedules/${schedule.id}`, 'PATCH', {
             name,
             cron,
             timezone,
             run_template: template,
           });
+          saved();
+          timing.markSaved();
           close();
         }}
       >

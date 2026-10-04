@@ -23,6 +23,7 @@ from tokendrain.api.schemas import (
     AuthImport,
     LoginInput,
     PlatformInput,
+    ProjectCreateInput,
     ResizeInput,
     RestoreInput,
     SecretImport,
@@ -58,7 +59,7 @@ from tokendrain.events import event_json
 from tokendrain.github.provider import GitHubConfig, IntegrationInput
 from tokendrain.scheduler.service import next_occurrence
 from tokendrain.secrets import SecretService, parse_dotenv
-from tokendrain.services import columns
+from tokendrain.services import columns, validate_github_access
 from tokendrain.storage import FileProjectStorage
 from tokendrain.usage import normalize_rate_limits
 
@@ -126,10 +127,21 @@ async def projects(request: Request) -> Any:
 
 
 @router.post(API + "/projects", status_code=201)
-async def create_project(request: Request, body: ProjectCreate) -> Any:
+async def create_project(request: Request, body: ProjectCreateInput) -> Any:
     services = current(request)
     ready(services)
-    project_id = await services.projects.create(body)
+    credential_ref = None
+    if body.github:
+        app = await github_app(services)
+        credential_ref = app.credential_ref
+        await validate_github_repository(request, body.github)
+        async with services.sessions() as db:
+            await validate_github_access(db, body.github, credential_ref)
+    project_id = await services.projects.create(
+        ProjectCreate.model_validate(body.model_dump(exclude={"github"})),
+        body.github,
+        credential_ref,
+    )
     return encoded(await services.projects.get(project_id))
 
 
@@ -730,24 +742,22 @@ async def project_github(request: Request, project_id: str) -> Any:
         return {**columns(row), "installation_id": str(row.installation_id)} if row else None
 
 
+async def validate_github_repository(request: Request, body: IntegrationInput) -> None:
+    repos = await repositories(request, body.installation_id)
+    repository = next((repo for repo in repos if repo["id"] == body.repository_id), None)
+    if repository is None or repository["full_name"] != body.repository_name:
+        raise ValueError("Repository is not available to this installation")
+
+
 @router.put(API + "/projects/{project_id}/github")
 async def attach_github(request: Request, project_id: str, body: IntegrationInput) -> Any:
     services = current(request)
     await services.projects.require_idle(project_id)
     app_revision = await github_app(services)
-    repos = await repositories(request, body.installation_id)
-    repository = next((repo for repo in repos if repo["id"] == body.repository_id), None)
-    if repository is None or repository["full_name"] != body.repository_name:
-        raise ValueError("Repository is not available to this installation")
+    await validate_github_repository(request, body)
     async with services.sessions.begin() as db:
         await db.execute(text("BEGIN IMMEDIATE"))
-        app = await db.get(GitHubApp, 1)
-        if (
-            await db.get(Setting, "provider_change")
-            or app is None
-            or app.credential_ref != app_revision.credential_ref
-        ):
-            raise ValueError("GitHub configuration changed; reload repositories and retry")
+        await validate_github_access(db, body, app_revision.credential_ref)
         if not await db.get(Project, project_id):
             raise LookupError("Project not found")
         active = await db.scalar(
@@ -760,13 +770,6 @@ async def attach_github(request: Request, project_id: str, body: IntegrationInpu
         )
         if active:
             raise ValueError("Project has an active or queued execution")
-        installation = await db.get(GitHubInstallation, body.installation_id)
-        if installation is None:
-            raise ValueError("Installation changed; sync GitHub and reload repositories")
-        for permission, requested in body.permissions.items():
-            maximum = installation.permissions.get(permission, "none")
-            if maximum == "none" or (requested == "write" and maximum != "write"):
-                raise ValueError(f"Installation does not grant {permission}:{requested}")
         row = await db.get(ProjectGitHub, project_id)
         if row:
             for key, value in body.model_dump().items():

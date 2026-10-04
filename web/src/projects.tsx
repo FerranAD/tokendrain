@@ -3,7 +3,8 @@ import { ModelSelector } from './model-selector';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { mutate, useAction, useResource } from './api';
-import type { Execution, Project, Secret, Snapshot, StorageInfo } from './types';
+import type { Execution, Project, ProjectGitHub, Secret, Snapshot, StorageInfo } from './types';
+import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
 import {
   ActionNotice,
   Badge,
@@ -20,6 +21,7 @@ import {
   useNavigation,
 } from './ui';
 import { ProjectGitHubPanel } from './settings';
+import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
 
 export function ProjectCards({ projects }: { projects: Project[] }) {
   if (!projects.length)
@@ -77,19 +79,40 @@ export function ProjectsPage() {
 export function NewProject({ close }: { close: () => void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('medium');
+  const [attachGitHub, setAttachGitHub] = useState(false);
+  const [github, setGitHub] = useState<ProjectGitHub>(emptyGitHub);
   const [initialTasks, setInitialTasks] = useState<
     { title: string; description: string; column: string }[]
   >([]);
+  const draft = useUnsavedChanges({
+    name,
+    description,
+    model,
+    effort,
+    initialTasks,
+    attachGitHub,
+    github,
+  });
+  const dismiss = () => {
+    if (draft.discard()) close();
+  };
   const action = useAction();
   const { go } = useNavigation();
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void action.run(async () => {
+      const integration = attachGitHub ? githubPayload(github) : undefined;
       const project = await mutate<Project>('/projects', 'POST', {
         name,
         description,
         initial_tasks: initialTasks.filter((t) => t.title.trim()),
+        default_model: model,
+        default_reasoning_effort: effort,
+        ...(integration ? { github: integration } : {}),
       });
+      draft.markSaved();
       go(`/projects/${project.id}`);
     });
   };
@@ -97,7 +120,7 @@ export function NewProject({ close }: { close: () => void }) {
     <section className="panel create-panel">
       <div className="row between">
         <h2>Create a project</h2>
-        <button className="quiet" onClick={close} aria-label="Close new project form">
+        <button className="quiet" onClick={dismiss} aria-label="Close new project form">
           ✕
         </button>
       </div>
@@ -123,6 +146,30 @@ export function NewProject({ close }: { close: () => void }) {
             placeholder="Describe the goal, success criteria, and any constraints…"
           />
         </label>
+        <fieldset className="initial-tasks">
+          <legend>Agent defaults</legend>
+          <ModelSelector
+            defaults
+            model={model}
+            effort={effort}
+            onChange={(values) => {
+              setModel(values.model);
+              setEffort(values.reasoning_effort);
+            }}
+          />
+        </fieldset>
+        <fieldset className="initial-tasks">
+          <legend>GitHub · optional</legend>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={attachGitHub}
+              onChange={(e) => setAttachGitHub(e.target.checked)}
+            />
+            <span>Attach a GitHub repository</span>
+          </label>
+          {attachGitHub && <GitHubFields value={github} onChange={setGitHub} />}
+        </fieldset>
         <fieldset className="initial-tasks">
           <legend>Initial tasks</legend>
           {initialTasks.map((task, i) => (
@@ -187,9 +234,10 @@ export function NewProject({ close }: { close: () => void }) {
           Each project gets its own persistent environment and workspace. Agents run autonomously
           inside an isolated microVM.
         </p>
+        <UnsavedNotice dirty={draft.dirty} />
         <ActionNotice {...action} />
         <div className="form-actions">
-          <button type="button" onClick={close}>
+          <button type="button" onClick={dismiss}>
             Cancel
           </button>
           <button className="primary" disabled={action.busy}>
@@ -253,7 +301,9 @@ export function ProjectPage({ id }: { id: string }) {
           <button
             key={name}
             className={name === tab ? 'active' : ''}
-            onClick={() => setTab(name)}
+            onClick={() => {
+              if (name !== tab && confirmDiscardChanges()) setTab(name);
+            }}
             aria-current={name === tab ? 'page' : undefined}
           >
             {name === 'Feedback' ? 'Next run feedback' : name}
@@ -379,6 +429,7 @@ function ProjectEditor({
   const [name, setName] = useState(project.name);
   const [model, setModel] = useState(project.default_model);
   const [effort, setEffort] = useState(project.default_reasoning_effort);
+  const draft = useUnsavedChanges({ text, name, model, effort });
   const action = useAction();
   const labels = {
     description: 'Project description',
@@ -395,16 +446,15 @@ function ProjectEditor({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void action.run(
-            () =>
-              mutate(`/projects/${project.id}`, 'PATCH', {
-                [field]: text,
-                ...(field === 'description'
-                  ? { name, default_model: model, default_reasoning_effort: effort || 'medium' }
-                  : {}),
-              }),
-            'Changes saved.',
-          );
+          void action.run(async () => {
+            await mutate(`/projects/${project.id}`, 'PATCH', {
+              [field]: text,
+              ...(field === 'description'
+                ? { name, default_model: model, default_reasoning_effort: effort || 'medium' }
+                : {}),
+            });
+            draft.markSaved();
+          }, 'Changes saved.');
         }}
       >
         {field === 'description' && (
@@ -420,7 +470,12 @@ function ProjectEditor({
         )}
         <label>
           <span className="sr-only">{labels[field]}</span>
-          <textarea rows={15} value={text} onChange={(e) => setText(e.target.value)} />
+          <textarea
+            aria-label={labels[field]}
+            rows={15}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
         </label>
         {field === 'description' && (
           <ModelSelector
@@ -433,9 +488,10 @@ function ProjectEditor({
             }}
           />
         )}
-        <ActionNotice {...action} />
+        <UnsavedNotice dirty={draft.dirty} />
+        <ActionNotice {...action} notice={draft.dirty ? undefined : action.notice} />
         <div className="form-actions">
-          <button className="primary" disabled={action.busy}>
+          <button className="primary" disabled={action.busy || !draft.dirty}>
             {action.busy ? 'Saving…' : 'Save changes'}
           </button>
         </div>
@@ -495,6 +551,7 @@ function EnvironmentPanel({ id }: { id: string }) {
   const [name, setName] = useState('');
   const [scope, setScope] = useState('workspace');
   const [size, setSize] = useState(40);
+  const snapshotDraft = useUnsavedChanges(name);
   const action = useAction();
   return (
     <>
@@ -591,6 +648,7 @@ function EnvironmentPanel({ id }: { id: string }) {
             void action.run(async () => {
               await mutate(`/projects/${id}/snapshots`, 'POST', { name });
               setName('');
+              snapshotDraft.markSaved('');
             }, 'Snapshot created.');
           }}
         >
@@ -605,6 +663,7 @@ function EnvironmentPanel({ id }: { id: string }) {
           </label>
           <button disabled={action.busy}>Create snapshot</button>
         </form>
+        <UnsavedNotice dirty={snapshotDraft.dirty} />
         <ErrorNotice error={snapshots.error} />
         {snapshots.data?.length ? (
           <div className="snapshot-list">
@@ -690,6 +749,7 @@ function SecretsPanel({ id }: { id: string }) {
   const [dotenv, setDotenv] = useState('');
   const [descriptions, setDescriptions] = useState<Record<string, string>>({});
   const action = useAction();
+  const draft = useUnsavedChanges({ dotenv, descriptions });
   const names = [
     ...new Set(
       Array.from(
@@ -711,7 +771,13 @@ function SecretsPanel({ id }: { id: string }) {
       <section className="panel">
         <div className="row between">
           <h2>Project secrets</h2>
-          <button onClick={() => setEditing('new')}>+ Add secret</button>
+          <button
+            onClick={() => {
+              if (confirmDiscardChanges()) setEditing('new');
+            }}
+          >
+            + Add secret
+          </button>
         </div>
         <ErrorNotice error={secrets.error} />
         {editing && (
@@ -731,7 +797,12 @@ function SecretsPanel({ id }: { id: string }) {
                   <p className="small muted">{secret.description}</p>
                 </div>
                 <div className="row">
-                  <button className="quiet" onClick={() => setEditing(secret)}>
+                  <button
+                    className="quiet"
+                    onClick={() => {
+                      if (confirmDiscardChanges()) setEditing(secret);
+                    }}
+                  >
                     Edit
                   </button>
                   <button
@@ -770,6 +841,7 @@ function SecretsPanel({ id }: { id: string }) {
             void action.run(async () => {
               await mutate(`/projects/${id}/secrets/import`, 'POST', { dotenv, descriptions });
               setDotenv('');
+              draft.markSaved({ dotenv: '', descriptions: {} });
               setDescriptions({});
             }, 'Secrets imported.');
           }}
@@ -811,6 +883,7 @@ function SecretsPanel({ id }: { id: string }) {
               />
             </label>
           ))}
+          <UnsavedNotice dirty={draft.dirty} />
           <button className="primary" disabled={action.busy || !names.length}>
             Import {names.length || ''} secret{names.length === 1 ? '' : 's'}
           </button>
@@ -833,6 +906,7 @@ function SecretEditor({
   const [value, setValue] = useState('');
   const [description, setDescription] = useState(secret?.description ?? '');
   const action = useAction();
+  const draft = useUnsavedChanges({ name, value, description });
   return (
     <form
       className="inset"
@@ -844,6 +918,7 @@ function SecretEditor({
             description,
           });
           setValue('');
+          draft.markSaved();
           close();
         });
       }}
@@ -879,9 +954,15 @@ function SecretEditor({
           onChange={(e) => setDescription(e.target.value)}
         />
       </label>
+      <UnsavedNotice dirty={draft.dirty} />
       <ActionNotice {...action} />
       <div className="form-actions">
-        <button type="button" onClick={close}>
+        <button
+          type="button"
+          onClick={() => {
+            if (draft.discard()) close();
+          }}
+        >
           Cancel
         </button>
         <button className="primary" disabled={action.busy}>
