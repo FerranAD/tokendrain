@@ -152,6 +152,7 @@ export function PrepareRunPage({ selectedProject }: { selectedProject?: string }
             <button
               type="button"
               className={mode === 'run' ? 'selected' : ''}
+              aria-pressed={mode === 'run'}
               onClick={() => setMode('run')}
             >
               Start now
@@ -159,6 +160,7 @@ export function PrepareRunPage({ selectedProject }: { selectedProject?: string }
             <button
               type="button"
               className={mode === 'schedule' ? 'selected' : ''}
+              aria-pressed={mode === 'schedule'}
               onClick={() => setMode('schedule')}
             >
               Save a schedule
@@ -219,7 +221,9 @@ export function RunBuilder({
   const [parallel, setParallel] = useState(initial?.parallel ?? true);
   const [initialized, setInitialized] = useState(false);
   const action = useAction();
-  const draft = useUnsavedChanges({ configs, conditions, thresholdMode, parallel, draftContext });
+  const configuration = { configs, conditions, thresholdMode, parallel, draftContext };
+  // Preparation is a new configuration, not edits to a saved Run or schedule.
+  const draft = useUnsavedChanges(configuration, configuration, !!initial);
   // Apply the URL selection once after projects arrive without resetting edits on live updates.
   if (!initialized && projects.data) {
     setInitialized(true);

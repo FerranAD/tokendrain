@@ -33,26 +33,47 @@ export function ThemeControl() {
     };
   }, [theme]);
   return (
-    <label className="theme-control">
+    <div className="theme-control">
       <span>Appearance</span>
-      <select
-        aria-label="Appearance"
-        value={theme}
-        onChange={(e) => {
-          const value = e.target.value as Theme;
-          setTheme(value);
-          try {
-            if (value === 'system') localStorage.removeItem('tokendrain.theme');
-            else localStorage.setItem('tokendrain.theme', value);
-          } catch {
-            /* Keep the in-memory preference. */
-          }
-        }}
-      >
-        <option value="system">System</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
+      <div className="theme-options" role="group" aria-label="Appearance">
+        {(['light', 'dark', 'system'] as const).map((value) => {
+          const label = `${value.charAt(0).toUpperCase()}${value.slice(1)} theme`;
+          return (
+            <button
+              key={value}
+              type="button"
+              aria-label={label}
+              title={label}
+              aria-pressed={theme === value}
+              onClick={() => {
+                setTheme(value);
+                try {
+                  if (value === 'system') localStorage.removeItem('tokendrain.theme');
+                  else localStorage.setItem('tokendrain.theme', value);
+                } catch {
+                  /* Keep the in-memory preference. */
+                }
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                {value === 'light' ? (
+                  <>
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" />
+                  </>
+                ) : value === 'dark' ? (
+                  <path d="M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z" />
+                ) : (
+                  <>
+                    <rect x="3" y="4" width="18" height="13" rx="2" />
+                    <path d="M8 21h8m-4-4v4" />
+                  </>
+                )}
+              </svg>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

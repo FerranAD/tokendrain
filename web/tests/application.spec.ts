@@ -535,11 +535,11 @@ test('appearance follows system and persists an explicit theme', async ({ page }
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.locator('.logo-dark').first()).toBeVisible();
-  await page.getByLabel('Appearance', { exact: true }).selectOption('light');
+  await page.getByRole('button', { name: 'Light theme', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await page.getByLabel('Appearance', { exact: true }).selectOption('dark');
+  await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
   await page.screenshot({
     path: 'test-results/dashboard-dark.png',
     fullPage: true,
@@ -555,7 +555,7 @@ test('appearance follows system and persists an explicit theme', async ({ page }
     fullPage: true,
     animations: 'disabled',
   });
-  await page.getByLabel('Appearance', { exact: true }).selectOption('system');
+  await page.getByRole('button', { name: 'System theme', exact: true }).click();
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
@@ -616,5 +616,49 @@ test('project creation saves the model and GitHub integration together', async (
       repository_name: 'octocat/telescope',
       permissions: { contents: 'write', pull_requests: 'write' },
     },
+  });
+});
+
+test('Run preparation has no unsaved warning and dark controls show selection', async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto('/prepare?project=project-a');
+  await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Dark theme', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.getByRole('radio', { name: /Hard limit/ }).check();
+  await page.getByRole('radio', { name: /Graceful stop/ }).check();
+  await expect(page.getByText('Unsaved changes', { exact: true })).toHaveCount(0);
+  const now = page.getByRole('button', { name: 'Start now', exact: true });
+  const schedule = page.getByRole('button', { name: 'Save a schedule', exact: true });
+  await expect(now).toHaveAttribute('aria-pressed', 'true');
+  await schedule.click();
+  await expect(schedule).toHaveAttribute('aria-pressed', 'true');
+  await expect(now).toHaveAttribute('aria-pressed', 'false');
+  const colors = await page
+    .locator('.segmented button')
+    .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).backgroundColor));
+  expect(colors[0]).not.toBe(colors[1]);
+  await expect(page.getByText('Unsaved changes', { exact: true })).toHaveCount(0);
+  let warned = false;
+  page.on('dialog', (dialog) => {
+    warned = true;
+    void dialog.dismiss();
+  });
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await expect(page).toHaveURL(/settings$/);
+  expect(warned).toBe(false);
+  await page.getByText('Set up a self-hosted GitHub App', { exact: true }).click();
+  const guideColor = await page
+    .locator('.setup-guide')
+    .evaluate((guide) => getComputedStyle(guide).backgroundColor);
+  expect(guideColor).toBe('rgb(34, 46, 39)');
+  await page.screenshot({
+    path: 'test-results/settings-dark.png',
+    fullPage: true,
+    animations: 'disabled',
   });
 });

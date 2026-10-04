@@ -1124,8 +1124,8 @@ input[type='checkbox'] {
   margin-top: 20px;
 }
 .setup-guide {
-  background: #f8faf5;
-  border: 1px solid #e1e8d9;
+  background: var(--soft);
+  border: 1px solid var(--line);
   border-radius: 7px;
   padding: 17px;
   margin-bottom: 20px;
@@ -1135,7 +1135,7 @@ input[type='checkbox'] {
 }
 .setup-guide ol {
   padding-left: 20px;
-  color: #647657;
+  color: var(--muted);
 }
 .setup-guide li {
   font-size: 12px;
@@ -2131,15 +2131,12 @@ summary {
   max-width: 100%;
 }
 .theme-control {
+  display: flex;
+  flex-direction: column;
   gap: 7px;
   color: var(--muted);
   font-size: 11px;
   margin-bottom: 15px;
-}
-.theme-control select {
-  min-height: 34px;
-  font-size: 12px;
-  padding: 7px 10px;
 }
 input[type='checkbox'],
 input[type='radio'] {
@@ -2399,9 +2396,6 @@ input[type='radio'] {
     flex-direction: row;
     align-items: center;
   }
-  .theme-control select {
-    width: auto;
-  }
   [data-theme='dark'] .sidebar nav a.active {
     box-shadow: inset 0 -3px var(--green);
   }
@@ -2416,4 +2410,66 @@ input[type='radio'] {
 [data-theme='dark'] .panel:has(.unsaved-notice),
 [data-theme='dark'] .inset:has(.unsaved-notice) {
   border-color: #9a814d;
+}
+.theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--soft);
+}
+.theme-options button,
+[data-theme='dark'] .theme-options button {
+  min-height: 34px;
+  min-width: 38px;
+  padding: 7px 12px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+.theme-options button:hover,
+[data-theme='dark'] .theme-options button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.theme-options button[aria-pressed='true'],
+[data-theme='dark'] .theme-options button[aria-pressed='true'] {
+  background: var(--panel);
+  color: var(--green);
+  border-color: var(--control-line);
+  box-shadow: 0 2px 4px var(--shadow);
+}
+.theme-options svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+[data-theme='dark'] .segmented button {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+[data-theme='dark'] .segmented button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+[data-theme='dark'] .segmented button.selected,
+[data-theme='dark'] .segmented button.selected:hover {
+  background: #91d2ad;
+  border-color: #91d2ad;
+  color: #153d29;
+  font-weight: 650;
+  box-shadow: 0 1px 4px #0003;
+}
+.setup-guide strong {
+  color: var(--ink);
 }

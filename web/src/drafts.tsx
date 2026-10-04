@@ -5,13 +5,13 @@ export function confirmDiscardChanges() {
   return drafts.size === 0 || window.confirm('You have unsaved changes. Leave and discard them?');
 }
 
-export function useUnsavedChanges(value: unknown, initial: unknown = value) {
+export function useUnsavedChanges(value: unknown, initial: unknown = value, enabled = true) {
   const key = useRef(Symbol('draft'));
   const serialized = JSON.stringify(value);
   const latest = useRef(serialized);
   latest.current = serialized;
   const [saved, setSaved] = useState(() => JSON.stringify(initial));
-  const dirty = serialized !== saved;
+  const dirty = enabled && serialized !== saved;
   useEffect(() => {
     const id = key.current;
     if (dirty) drafts.add(id);
@@ -32,7 +32,7 @@ export function useUnsavedChanges(value: unknown, initial: unknown = value) {
     dirty,
     markSaved: (next: unknown = value) => {
       const checkpoint = JSON.stringify(next);
-      if (checkpoint === latest.current) drafts.delete(key.current);
+      if (!enabled || checkpoint === latest.current) drafts.delete(key.current);
       else drafts.add(key.current);
       setSaved(checkpoint);
     },
