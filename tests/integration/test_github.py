@@ -35,14 +35,24 @@ async def test_jwt_scoped_tokens_and_refresh_lock(tmp_path: Path) -> None:
         assert request.url.path == "/app/installations/7/access_tokens"
         assert json.loads(request.content) == {
             "repository_ids": [99],
-            "permissions": {"contents": "write", "issues": "read", "actions": "write"},
+            "permissions": {
+                "contents": "write",
+                "issues": "read",
+                "actions": "write",
+                "workflows": "write",
+            },
         }
         return httpx.Response(
             201,
             json={
                 "token": "short-lived-installation-token",
                 "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-                "permissions": {"contents": "write", "issues": "read", "actions": "write"},
+                "permissions": {
+                    "contents": "write",
+                    "issues": "read",
+                    "actions": "write",
+                    "workflows": "write",
+                },
             },
         )
 
@@ -52,7 +62,12 @@ async def test_jwt_scoped_tokens_and_refresh_lock(tmp_path: Path) -> None:
             installation_id=7,
             repository_id=99,
             repository_name="owner/repo",
-            permissions={"contents": "write", "issues": "read", "actions": "write"},
+            permissions={
+                "contents": "write",
+                "issues": "read",
+                "actions": "write",
+                "workflows": "write",
+            },
         )
         results = await asyncio.gather(
             *(provider.token("1234", "key", integration) for _ in range(12))
@@ -77,6 +92,8 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
     ).decode()
 
+    installation_permissions = {"contents": "read", "issues": "write", "actions": "read"}
+
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/app":
@@ -88,7 +105,7 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
                     {
                         "id": 7,
                         "account": {"login": "owner"},
-                        "permissions": {"contents": "read", "issues": "write", "actions": "read"},
+                        "permissions": installation_permissions,
                     }
                 ],
             )
@@ -161,7 +178,21 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
             denied_actions = await client.put(f"/api/v1/projects/{project}/github", json=binding)
             assert denied_actions.status_code == 409
             assert "does not grant actions:write" in denied_actions.text
-            binding["permissions"] = {"contents": "read", "issues": "write", "actions": "read"}
+            binding["permissions"] = {"workflows": "read"}
+            invalid_workflows = await client.put(f"/api/v1/projects/{project}/github", json=binding)
+            assert invalid_workflows.status_code == 422
+            binding["permissions"] = {"workflows": "write"}
+            denied_workflows = await client.put(f"/api/v1/projects/{project}/github", json=binding)
+            assert denied_workflows.status_code == 409
+            assert "does not grant workflows:write" in denied_workflows.text
+            installation_permissions["workflows"] = "write"
+            assert (await client.post("/api/v1/integrations/github/sync")).status_code == 200
+            binding["permissions"] = {
+                "contents": "read",
+                "issues": "write",
+                "actions": "read",
+                "workflows": "write",
+            }
             attached = await client.put(f"/api/v1/projects/{project}/github", json=binding)
             assert attached.status_code == 200, attached.text
             assert attached.json()["permissions"] == binding["permissions"]

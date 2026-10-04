@@ -33,8 +33,18 @@ class IntegrationInput(BaseModel):
     def valid_permissions(
         cls, value: dict[str, Literal["read", "write"]]
     ) -> dict[str, Literal["read", "write"]]:
-        if not value or set(value) - {"contents", "pull_requests", "issues", "actions"}:
-            raise ValueError("Select contents, pull_requests, issues or actions permissions")
+        if not value or set(value) - {
+            "contents",
+            "pull_requests",
+            "issues",
+            "actions",
+            "workflows",
+        }:
+            raise ValueError(
+                "Select contents, pull_requests, issues, actions or workflows permissions"
+            )
+        if "workflows" in value and value["workflows"] != "write":
+            raise ValueError("Workflows only supports write access; omit it for no access")
         return value
 
 

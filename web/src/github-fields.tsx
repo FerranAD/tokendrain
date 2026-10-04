@@ -14,6 +14,7 @@ const permissionNames: Record<string, string> = {
   pull_requests: 'Pull requests',
   issues: 'Issues',
   actions: 'GitHub Actions',
+  workflows: 'Workflow files',
 };
 
 export function GitHubFields({
@@ -102,7 +103,9 @@ export function GitHubFields({
             {Object.entries(permissionNames).map(([key, label]) => {
               const maximum = installation?.permissions?.[key];
               const known = !!installation?.permissions;
-              const read = !known || ['read', 'write', 'admin'].includes(maximum || '');
+              const read =
+                key !== 'workflows' &&
+                (!known || ['read', 'write', 'admin'].includes(maximum || ''));
               const write = !known || ['write', 'admin'].includes(maximum || '');
               return (
                 <label key={key}>
@@ -119,12 +122,21 @@ export function GitHubFields({
                   >
                     <option value="">No access</option>
                     {read && <option value="read">Read</option>}
-                    {write && <option value="write">Read & write</option>}
+                    {write && (
+                      <option value="write">
+                        {key === 'workflows' ? 'Write' : 'Read & write'}
+                      </option>
+                    )}
                   </select>
                 </label>
               );
             })}
           </div>
+          {value.permissions.workflows === 'write' && value.permissions.contents !== 'write' && (
+            <div className="notice warning" role="alert">
+              Publishing workflow file changes also needs Repository contents write access.
+            </div>
+          )}
           {value.permissions.pull_requests === 'write' &&
             value.permissions.contents !== 'write' && (
               <div className="notice warning" role="alert">

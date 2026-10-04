@@ -71,7 +71,7 @@ Check `scope` identifies `daemon`, `helper`, or `mock` (local CLI diagnostics al
 - `GET /integrations/github/setup` → public, side-effect-free redirect to `/settings?github=installed`; query installation IDs are not trusted. Settings offers an authenticated `POST /integrations/github/sync` to perform discovery.
 - `GET /integrations/github/installations/{id}/repositories` → `Repository[]`
 - `GET /projects/{id}/github` → `ProjectGitHub|null`
-- `PUT /projects/{id}/github {installation_id,repository_id,repository_name,permissions:{contents:"read"|"write",pull_requests?:"read"|"write",issues?:"read"|"write",actions?:"read"|"write"}}`
+- `PUT /projects/{id}/github {installation_id,repository_id,repository_name,permissions:{contents:"read"|"write",pull_requests?:"read"|"write",issues?:"read"|"write",actions?:"read"|"write",workflows?:"write"}}`
 - `DELETE /projects/{id}/github`
 
 Installation: `{id,account,permissions?:Record<string,string>}`. Repository: `{id,full_name,private?,default_branch?}`. ProjectGitHub is the PUT body.

@@ -114,6 +114,7 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
               pull_requests: 'write',
               issues: 'read',
               actions: 'write',
+              workflows: 'write',
             },
           },
         ],
@@ -257,6 +258,7 @@ test('GitHub repository access narrows installation permissions', async ({ page 
     .selectOption('write');
   await page.getByRole('combobox', { name: 'Pull requests', exact: true }).selectOption('write');
   await page.getByRole('combobox', { name: 'GitHub Actions', exact: true }).selectOption('write');
+  await page.getByRole('combobox', { name: 'Workflow files', exact: true }).selectOption('write');
   expect(
     await page
       .getByRole('combobox', { name: 'Issues', exact: true })
@@ -269,12 +271,19 @@ test('GitHub repository access narrows installation permissions', async ({ page 
     installation_id: '123',
     repository_id: 55,
     repository_name: 'octocat/telescope',
-    permissions: { contents: 'write', pull_requests: 'write', actions: 'write' },
+    permissions: {
+      contents: 'write',
+      pull_requests: 'write',
+      actions: 'write',
+      workflows: 'write',
+    },
   });
   expect(errors).toEqual([]);
 });
 
-test('GitHub Actions write is hidden for a read-only installation', async ({ page }) => {
+test('GitHub write permissions are hidden unless the installation grants them', async ({
+  page,
+}) => {
   await fixture(page);
   await page.route('**/api/v1/integrations/github', (route) =>
     route.fulfill({
@@ -293,6 +302,12 @@ test('GitHub Actions write is hidden for a read-only installation', async ({ pag
       .locator('option')
       .allTextContents(),
   ).toEqual(['No access', 'Read']);
+  expect(
+    await page
+      .getByRole('combobox', { name: 'Workflow files', exact: true })
+      .locator('option')
+      .allTextContents(),
+  ).toEqual(['No access']);
 });
 
 test('schedules use the ordinary run template with timezone-aware timing', async ({ page }) => {

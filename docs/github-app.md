@@ -36,10 +36,11 @@ Set only the App permissions you expect to grant projects. Typical choices are:
 | Pull requests | Pull requests | No access / read / read and write | Inspect or create/update pull requests |
 | Issues | Issues | No access / read / read and write | Inspect or create/update issues |
 | GitHub Actions | Actions | No access / read / read and write | Inspect runs and logs; write adds dispatch, rerun and cancellation operations |
+| Workflow files | Workflows | No access / write | Publish changes to `.github/workflows` files, together with Contents write access |
 
-GitHub supplies repository metadata access as part of the installation model. Other permission categories are outside this version's project selector. In particular, tokendrain does not request administration or workflow-file management capabilities. GitHub can reject an operation requiring permissions beyond this subset.
+GitHub supplies repository metadata access as part of the installation model. Other permission categories are outside this version's project selector. In particular, tokendrain does not request administration capabilities. GitHub can reject an operation requiring permissions beyond this subset.
 
-After changing App permissions, approve the change for the installation in GitHub, then refresh installations in tokendrain Settings. Actions write access manages workflow runs; editing `.github/workflows` files requires the separate Workflows permission, which tokendrain does not currently offer.
+After changing App permissions, approve the change for the installation in GitHub, then refresh installations in tokendrain Settings. Actions write access manages workflow runs; editing `.github/workflows` files requires the separate Workflows permission, available as Workflow files in the project selector.
 
 These App permissions are a ceiling, not an instruction to grant every project all of them. A read-only investigation can receive only `contents:read`; a coding project may need `contents:write` and `pull_requests:write`. Repository branch rules, organization policy, and installation approval still apply.
 
