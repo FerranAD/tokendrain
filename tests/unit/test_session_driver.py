@@ -184,6 +184,53 @@ async def test_saved_thread_is_loaded_before_reading_or_starting_work() -> None:
     await session.close()
 
 
+@pytest.mark.parametrize(
+    "resume_error",
+    ["no rollout found for thread id missing-thread", "permission denied reading rollout"],
+)
+async def test_missing_rollout_starts_fresh_but_other_resume_errors_fail(resume_error: str) -> None:
+    class ResumeFailure(Guest):
+        async def request(
+            self, method: str, params: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
+            if method == "thread/resume":
+                self.requests.append((method, params or {}))
+                raise RpcError(-32600, resume_error)
+            return await super().request(method, params)
+
+    guest = ResumeFailure()
+    messages: list[str] = []
+
+    async def noop(*args: Any) -> None:
+        pass
+
+    async def log(message: str) -> None:
+        messages.append(message)
+
+    session = await RealSessionFactory(Auth(), connector=Connector([guest])).connect(
+        VmHandle(execution_id="e", project_id="p", vsock_path=Path("/unused")), {}, noop, log, noop
+    )
+    if resume_error.startswith("no rollout found"):
+        assert await session.initialize("missing-thread", "selected-model") == "thread"
+        assert [method for method, _ in guest.requests].count("thread/start") == 1
+        fresh = next(params for method, params in guest.requests if method == "thread/start")
+        assert fresh["model"] == "selected-model" and "threadId" not in fresh
+        assert any(
+            "workspace, Kanban and last valid checkpoint are preserved" in m for m in messages
+        )
+        assert not any(method == "turn/start" for method, _ in guest.requests)
+        report = await session.turn("Inspect existing workspace", "", "medium", asyncio.Event())
+        assert report.status == "completed"
+        turn = next(params for method, params in guest.requests if method == "turn/start")
+        assert turn["threadId"] == "thread"
+    else:
+        with pytest.raises(RpcError, match="permission denied"):
+            await session.initialize("missing-thread", "selected-model")
+        assert not any(method == "thread/start" for method, _ in guest.requests)
+        assert not messages
+    await session.close()
+
+
 async def test_token_rotation_interrupts_once_and_resumes_existing_thread() -> None:
     guest = Guest("wait")
     auth = Auth(rotate=True)

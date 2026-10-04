@@ -291,7 +291,20 @@ class RealSession:
         await self.codex.initialize()
         # A persisted ID is not necessarily loaded in this app-server process.
         # Resume it before requesting its turns; neither operation starts model work.
-        self.thread_id = await self.codex.start_thread(model or None, thread_id=thread_id)
+        try:
+            self.thread_id = await self.codex.start_thread(model or None, thread_id=thread_id)
+        except RpcError as error:
+            # thread/start can return an ID before Codex has a durable rollout.
+            # A Run failing before its first turn can leave precisely this stale ID.
+            # Recover only this explicit absence, never auth/transport/corruption errors.
+            if not thread_id or not str(error).startswith("no rollout found for thread id "):
+                raise
+            self.thread_id = await self.codex.start_thread(model or None)
+            await self.log(
+                "Saved Codex conversation history is unavailable; started a new thread. "
+                "The existing workspace, Kanban and last valid checkpoint are preserved."
+            )
+            return self.thread_id
         if thread_id:
             await self.codex.read_thread(self.thread_id)
         return self.thread_id
