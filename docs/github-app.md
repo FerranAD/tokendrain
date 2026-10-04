@@ -35,9 +35,11 @@ Set only the App permissions you expect to grant projects. Typical choices are:
 | Repository contents | Contents | No access / read / read and write | HTTPS clone/fetch; write adds branch/commit/push operations |
 | Pull requests | Pull requests | No access / read / read and write | Inspect or create/update pull requests |
 | Issues | Issues | No access / read / read and write | Inspect or create/update issues |
-| Actions | Actions | No access / read | Inspect supported workflow/run information |
+| GitHub Actions | Actions | No access / read / read and write | Inspect runs and logs; write adds dispatch, rerun and cancellation operations |
 
 GitHub supplies repository metadata access as part of the installation model. Other permission categories are outside this version's project selector. In particular, tokendrain does not request administration or workflow-file management capabilities. GitHub can reject an operation requiring permissions beyond this subset.
+
+After changing App permissions, approve the change for the installation in GitHub, then refresh installations in tokendrain Settings. Actions write access manages workflow runs; editing `.github/workflows` files requires the separate Workflows permission, which tokendrain does not currently offer.
 
 These App permissions are a ceiling, not an instruction to grant every project all of them. A read-only investigation can receive only `contents:read`; a coding project may need `contents:write` and `pull_requests:write`. Repository branch rules, organization policy, and installation approval still apply.
 

@@ -13,7 +13,7 @@ const permissionNames: Record<string, string> = {
   contents: 'Repository contents',
   pull_requests: 'Pull requests',
   issues: 'Issues',
-  actions: 'Actions metadata',
+  actions: 'GitHub Actions',
 };
 
 export function GitHubFields({
@@ -103,8 +103,7 @@ export function GitHubFields({
               const maximum = installation?.permissions?.[key];
               const known = !!installation?.permissions;
               const read = !known || ['read', 'write', 'admin'].includes(maximum || '');
-              const write =
-                key !== 'actions' && (!known || ['write', 'admin'].includes(maximum || ''));
+              const write = !known || ['write', 'admin'].includes(maximum || '');
               return (
                 <label key={key}>
                   {label}

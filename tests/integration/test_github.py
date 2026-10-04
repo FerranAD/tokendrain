@@ -35,14 +35,14 @@ async def test_jwt_scoped_tokens_and_refresh_lock(tmp_path: Path) -> None:
         assert request.url.path == "/app/installations/7/access_tokens"
         assert json.loads(request.content) == {
             "repository_ids": [99],
-            "permissions": {"contents": "write", "issues": "read"},
+            "permissions": {"contents": "write", "issues": "read", "actions": "write"},
         }
         return httpx.Response(
             201,
             json={
                 "token": "short-lived-installation-token",
                 "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-                "permissions": {"contents": "write", "issues": "read"},
+                "permissions": {"contents": "write", "issues": "read", "actions": "write"},
             },
         )
 
@@ -52,7 +52,7 @@ async def test_jwt_scoped_tokens_and_refresh_lock(tmp_path: Path) -> None:
             installation_id=7,
             repository_id=99,
             repository_name="owner/repo",
-            permissions={"contents": "write", "issues": "read"},
+            permissions={"contents": "write", "issues": "read", "actions": "write"},
         )
         results = await asyncio.gather(
             *(provider.token("1234", "key", integration) for _ in range(12))
@@ -88,7 +88,7 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
                     {
                         "id": 7,
                         "account": {"login": "owner"},
-                        "permissions": {"contents": "read", "issues": "write"},
+                        "permissions": {"contents": "read", "issues": "write", "actions": "read"},
                     }
                 ],
             )
@@ -157,7 +157,11 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
             assert invalid_create.status_code == 409, invalid_create.text
             assert len((await client.get("/api/v1/projects")).json()) == before
             assert denied.status_code == 409 and "does not grant" in denied.text
-            binding["permissions"] = {"contents": "read", "issues": "write"}
+            binding["permissions"] = {"actions": "write"}
+            denied_actions = await client.put(f"/api/v1/projects/{project}/github", json=binding)
+            assert denied_actions.status_code == 409
+            assert "does not grant actions:write" in denied_actions.text
+            binding["permissions"] = {"contents": "read", "issues": "write", "actions": "read"}
             attached = await client.put(f"/api/v1/projects/{project}/github", json=binding)
             assert attached.status_code == 200, attached.text
             assert attached.json()["permissions"] == binding["permissions"]

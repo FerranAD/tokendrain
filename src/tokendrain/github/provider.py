@@ -35,8 +35,6 @@ class IntegrationInput(BaseModel):
     ) -> dict[str, Literal["read", "write"]]:
         if not value or set(value) - {"contents", "pull_requests", "issues", "actions"}:
             raise ValueError("Select contents, pull_requests, issues or actions permissions")
-        if value.get("actions") == "write":
-            raise ValueError("Only actions:read is supported")
         return value
 
 

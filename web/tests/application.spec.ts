@@ -113,7 +113,7 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
               contents: 'write',
               pull_requests: 'write',
               issues: 'read',
-              actions: 'read',
+              actions: 'write',
             },
           },
         ],
@@ -256,6 +256,7 @@ test('GitHub repository access narrows installation permissions', async ({ page 
     .getByRole('combobox', { name: 'Repository contents', exact: true })
     .selectOption('write');
   await page.getByRole('combobox', { name: 'Pull requests', exact: true }).selectOption('write');
+  await page.getByRole('combobox', { name: 'GitHub Actions', exact: true }).selectOption('write');
   expect(
     await page
       .getByRole('combobox', { name: 'Issues', exact: true })
@@ -268,9 +269,30 @@ test('GitHub repository access narrows installation permissions', async ({ page 
     installation_id: '123',
     repository_id: 55,
     repository_name: 'octocat/telescope',
-    permissions: { contents: 'write', pull_requests: 'write' },
+    permissions: { contents: 'write', pull_requests: 'write', actions: 'write' },
   });
   expect(errors).toEqual([]);
+});
+
+test('GitHub Actions write is hidden for a read-only installation', async ({ page }) => {
+  await fixture(page);
+  await page.route('**/api/v1/integrations/github', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        installations: [{ id: '123', account: 'octocat', permissions: { actions: 'read' } }],
+      },
+    }),
+  );
+  await page.goto('/projects/project-a');
+  await page.getByRole('button', { name: 'GitHub', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Installation', exact: true }).selectOption('123');
+  expect(
+    await page
+      .getByRole('combobox', { name: 'GitHub Actions', exact: true })
+      .locator('option')
+      .allTextContents(),
+  ).toEqual(['No access', 'Read']);
 });
 
 test('schedules use the ordinary run template with timezone-aware timing', async ({ page }) => {
