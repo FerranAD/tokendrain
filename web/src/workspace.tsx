@@ -1,3 +1,4 @@
+import { Icon } from './icons';
 import { useEffect, useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -145,7 +146,7 @@ export function WorkspacePanel({
           <p className="tiny muted">Read-only · /workspace</p>
         </div>
         <a className="button" href={url('archive', '')} download>
-          Download workspace as ZIP
+          <Icon name="download" /> Download workspace as ZIP
         </a>
       </div>
       <nav className="workspace-breadcrumbs" aria-label="Workspace path">
@@ -198,7 +199,7 @@ export function WorkspacePanel({
                         }
                       >
                         <span className="workspace-file-icon" aria-hidden="true">
-                          {entry.kind === 'directory' ? '▸' : '▤'}
+                          <Icon name={entry.kind === 'directory' ? 'folder' : 'file'} />
                         </span>
                         <span className="workspace-file-name">
                           {entry.name}
@@ -220,7 +221,7 @@ export function WorkspacePanel({
                         }
                         aria-label={`Download ${entry.name}${entry.kind === 'directory' ? ' as ZIP' : ''}`}
                       >
-                        ↓
+                        <Icon name="download" />
                       </a>
                     </div>
                   ))}
@@ -359,7 +360,7 @@ function FilePreview({ entry, base, onBack }: { entry: Entry; base: string; onBa
   return (
     <>
       <button className="workspace-back" onClick={onBack}>
-        ← Back to files
+        <Icon name="back" /> Back to files
       </button>
       <div className="workspace-preview-heading">
         <h3>{entry.path}</h3>
@@ -368,13 +369,15 @@ function FilePreview({ entry, base, onBack }: { entry: Entry; base: string; onBa
         </p>
         <div className="workspace-preview-actions">
           <a className="button" href={downloadUrl} download>
-            Download file
+            <Icon name="download" /> Download file
           </a>
           <button onClick={() => void copyValue(`/workspace/${entry.path}`, 'Path copied')}>
-            Copy path
+            <Icon name="copy" /> Copy path
           </button>
           {text != null && (
-            <button onClick={() => void copyValue(text, 'Contents copied')}>Copy contents</button>
+            <button onClick={() => void copyValue(text, 'Contents copied')}>
+              <Icon name="copy" /> Copy contents
+            </button>
           )}
           {text != null && (
             <button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>

@@ -1,3 +1,4 @@
+import { Icon } from './icons';
 import { WorkspacePanel } from './workspace';
 import { Kanban } from './kanban';
 import { ModelSelector } from './model-selector';
@@ -44,8 +45,14 @@ export function ProjectCards({ projects }: { projects: Project[] }) {
           <h3>{project.name}</h3>
           <p className="project-description">{project.description || 'No description yet.'}</p>
 
+          {project.latest_execution?.termination_reason && (
+            <div className="project-recent">
+              <Icon name={project.latest_execution.status === 'completed' ? 'check' : 'clock'} />
+              <span>{project.latest_execution.termination_reason.replaceAll('_', ' ')}</span>
+            </div>
+          )}
           <div className="project-footer">
-            <span>{project.default_model || 'Provider default model'}</span>
+            <span className="mono">{project.default_model || 'Provider default model'}</span>
             <span>
               {project.last_run_at ? date(project.last_run_at) : 'Ready for its first run'}
             </span>
@@ -63,10 +70,10 @@ export function ProjectsPage() {
     <>
       <PageTitle
         title="Projects"
-        description="Workspaces, tasks, and checkpoints for your projects."
+
         actions={
           <button className="primary" onClick={() => setCreating(true)}>
-            + New project
+            <Icon name="plus" /> New project
           </button>
         }
       />
@@ -122,7 +129,7 @@ export function NewProject({ close }: { close: () => void }) {
       <div className="row between">
         <h2>Create a project</h2>
         <button className="quiet" onClick={dismiss} aria-label="Close new project form">
-          ✕
+          <Icon name="close" />
         </button>
       </div>
       <form onSubmit={submit}>
@@ -232,8 +239,7 @@ export function NewProject({ close }: { close: () => void }) {
           </button>
         </fieldset>
         <p className="small muted">
-          Each project gets its own persistent environment and workspace. Agents run autonomously
-          inside an isolated microVM.
+          Add approved tasks now, or refine the board after creating the project.
         </p>
         <UnsavedNotice dirty={draft.dirty} />
         <ActionNotice {...action} />
@@ -252,12 +258,12 @@ export function NewProject({ close }: { close: () => void }) {
 
 const tabs = [
   'Overview',
-  'Description',
   'Kanban',
   'Workspace',
-  'Feedback',
   'Last run',
   'History',
+  'Description',
+  'Feedback',
   'Environment',
   'GitHub',
   'Secrets',
@@ -287,17 +293,17 @@ export function ProjectPage({ id }: { id: string }) {
       </Link>
       <PageTitle
         title={project.name}
-        description="Project state persists between every execution."
+        description={project.description || undefined}
         actions={
           <>
             <Badge status={project.status} />
             <Link className="button primary" href={`/prepare?project=${id}`}>
-              ▶ Prepare run
+              <Icon name="play" /> Prepare run
             </Link>
           </>
         }
       />
-      <nav className="tabs" aria-label="Project sections">
+      <nav className="tabs project-tabs" aria-label="Project sections">
         {tabs.map((name) => (
           <button
             key={name}
@@ -437,7 +443,7 @@ function ProjectEditor({
     next_run_feedback: 'Feedback for the next run',
   };
   const descriptions = {
-    description: 'A clear goal and success criteria guide autonomous work.',
+    description: 'What should the agent build, and what counts as done?',
     next_run_feedback: 'These instructions are included when the next execution starts.',
   };
   return (

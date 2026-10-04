@@ -1,3 +1,5 @@
+import { ThemeControl } from './theme';
+import { Icon } from './icons';
 import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
 import { UnsavedNotice, useUnsavedChanges } from './drafts';
 import { useState } from 'react';
@@ -8,14 +10,23 @@ import { ActionNotice, Badge, ErrorNotice, Loading, PageTitle } from './ui';
 export function SettingsPage() {
   return (
     <>
-      <PageTitle
-        eyebrow="Your infrastructure"
-        title="Settings"
-        description="Connect accounts and configure the platform that runs your projects."
-      />
-      <OpenAISettings />
-      <GitHubSettings />
-      <SystemSettings />
+      <PageTitle title="Settings" />
+      <nav className="settings-nav" aria-label="Settings sections">
+        <a href="#openai">Codex account</a>
+        <a href="#github">GitHub</a>
+        <a href="#system">Execution defaults</a>
+        <a href="#appearance">Appearance</a>
+      </nav>
+      <div className="settings-content">
+        <OpenAISettings />
+        <GitHubSettings />
+        <SystemSettings />
+        <section className="panel appearance-panel" id="appearance">
+          <h2>Appearance</h2>
+          <p className="small muted">Follow your system or choose a theme.</p>
+          <ThemeControl />
+        </section>
+      </div>
     </>
   );
 }
@@ -23,15 +34,14 @@ export function SettingsPage() {
 function OpenAISettings() {
   const status = useResource<OpenAIStatus>('/auth/openai');
   const [authJson, setAuthJson] = useState('');
-  const [importing, setImporting] = useState(true);
+  const [importing, setImporting] = useState(false);
   const action = useAction();
   const draft = useUnsavedChanges(authJson);
   return (
     <section className="panel" id="openai">
       <div className="row between">
         <div>
-          <div className="eyebrow">Agent connection</div>
-          <h2>OpenAI / Codex</h2>
+          <h2>Codex account</h2>
         </div>
         <Badge
           status={
@@ -45,8 +55,7 @@ function OpenAISettings() {
       </div>
       <ErrorNotice error={status.error || status.data?.credential_error} />
       <p className="muted">
-        Import your Codex credentials to run projects with your subscription. Long-lived credentials
-        stay encrypted on this host. Project VMs receive temporary access tokens.
+        Import auth.json from your Codex installation. Credentials refresh automatically.
       </p>
       {status.data?.connected && (
         <div className="callout">
@@ -179,8 +188,7 @@ function GitHubSettings() {
       )}
       <div className="row between">
         <div>
-          <div className="eyebrow">Repository integration</div>
-          <h2>Your GitHub App</h2>
+          <h2>GitHub App</h2>
         </div>
         <Badge status={status.data?.configured ? 'connected' : 'unconfigured'} />
       </div>
@@ -370,8 +378,7 @@ function SystemSettings() {
   const status = useResource<SystemInfo>('/system');
   return (
     <section className="panel" id="system">
-      <div className="eyebrow">Host configuration</div>
-      <h2>System & execution defaults</h2>
+      <h2>Execution defaults</h2>
       <ErrorNotice error={status.error} />
       {status.data ? (
         <>
@@ -398,26 +405,29 @@ function SystemSettings() {
             </div>
           </dl>
           <SystemForm system={status.data} />
-          <h3 className="top-space">System checks</h3>
-          <div className="checks">
-            {status.data.checks.map((check) => (
-              <div className="check" key={check.name}>
-                <span
-                  className={`check-mark ${check.ok ? 'ok' : 'bad'}`}
-                  aria-label={check.ok ? 'Pass' : 'Fail'}
-                >
-                  {check.ok ? '✓' : '!'}
-                </span>
-                <div>
-                  <strong>{check.name}</strong>
-                  <p className="small muted">
-                    {check.scope && `${check.scope}: `}
-                    {check.message}
-                  </p>
+          <details className="system-diagnostics">
+            <summary>System status & diagnostics</summary>{' '}
+            <h3 className="top-space">System checks</h3>
+            <div className="checks">
+              {status.data.checks.map((check) => (
+                <div className="check" key={check.name}>
+                  <span
+                    className={`check-mark ${check.ok ? 'ok' : 'bad'}`}
+                    aria-label={check.ok ? 'Pass' : 'Fail'}
+                  >
+                    <Icon name={check.ok ? 'check' : 'alert'} />
+                  </span>
+                  <div>
+                    <strong>{check.name}</strong>
+                    <p className="small muted">
+                      {check.scope && `${check.scope}: `}
+                      {check.message}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </details>{' '}
           <button className="quiet" onClick={status.reload}>
             Refresh system status
           </button>

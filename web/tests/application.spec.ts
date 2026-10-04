@@ -144,7 +144,7 @@ test('administration login uses a session and leaves no token in browser storage
   await page.goto('/');
   await page.getByLabel('Administration token').fill('test-only-admin-token');
   await page.getByRole('button', { name: 'Open tokendrain' }).click();
-  await expect(page.getByRole('heading', { name: 'Usage & runs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   expect(writes[0]).toEqual({
     path: '/session',
     method: 'POST',
@@ -518,10 +518,10 @@ test('Activity uses structured commands and filters persisted and live projects'
   await expect(page.getByRole('log')).toContainText(report.summary);
   await expect(page.getByRole('log')).toContainText('Building the utility');
   await expect(page.getByRole('log')).not.toContainText('Continue autonomous work');
-  await page.getByRole('combobox', { name: 'Project', exact: true }).selectOption('project-b');
+  await page.getByRole('button', { name: 'Build a todo app', exact: true }).click();
   await expect(page.getByRole('log')).not.toContainText('git push');
   await expect(page.getByRole('log')).toContainText('Building the utility');
-  await page.getByRole('combobox', { name: 'Project', exact: true }).selectOption('project-a');
+  await page.getByRole('button', { name: 'Package telescope', exact: true }).click();
   await expect(page.getByRole('log')).not.toContainText('Building the utility');
   await page.getByText('Show full output', { exact: true }).click();
   await expect(page.getByRole('log')).toContainText('GitHub rejected push (HTTP 403)');
@@ -678,10 +678,15 @@ test('Run preparation has no unsaved warning and dark controls show selection', 
   await expect(page).toHaveURL(/settings$/);
   expect(warned).toBe(false);
   await page.getByText('Set up a self-hosted GitHub App', { exact: true }).click();
-  const guideColor = await page
-    .locator('.setup-guide')
-    .evaluate((guide) => getComputedStyle(guide).backgroundColor);
-  expect(guideColor).toBe('rgb(34, 46, 39)');
+  const guideColor = await page.locator('.setup-guide').evaluate((guide) => {
+    const probe = document.createElement('div');
+    probe.style.backgroundColor = 'var(--field)';
+    guide.appendChild(probe);
+    const expected = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { actual: getComputedStyle(guide).backgroundColor, expected };
+  });
+  expect(guideColor.actual).toBe(guideColor.expected);
   await page.screenshot({
     path: 'test-results/settings-dark.png',
     fullPage: true,

@@ -47,13 +47,17 @@ export function ThemeControl() {
     const storage = () => setTheme(readTheme());
     media.addEventListener('change', changed);
     window.addEventListener('storage', storage);
+    const sync = (event: Event) => setTheme((event as CustomEvent<Theme>).detail);
+    window.addEventListener('tokendrain-theme', sync);
     return () => {
       media.removeEventListener('change', changed);
       window.removeEventListener('storage', storage);
+      window.removeEventListener('tokendrain-theme', sync);
     };
   }, [theme]);
   function chooseTheme(value: Theme) {
     setTheme(value);
+    window.dispatchEvent(new CustomEvent('tokendrain-theme', { detail: value }));
     try {
       if (value === 'system') localStorage.removeItem('tokendrain.theme');
       else localStorage.setItem('tokendrain.theme', value);

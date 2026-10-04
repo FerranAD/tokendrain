@@ -1,3 +1,4 @@
+import { Icon } from './icons';
 import { ModelSelector } from './model-selector';
 import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
 import { ActivityTimeline } from './activity';
@@ -66,11 +67,19 @@ export function RunTable({ runs }: { runs: Run[] }) {
             <tr key={run.id}>
               <td>
                 <Link href={`/runs/${run.id}`} className="mono">
-                  {shortId(run.id)} ↗
+                  {shortId(run.id)}
                 </Link>
               </td>
               <td>
                 <Badge status={run.status} />
+                {run.executions?.find((execution) => execution.termination_reason)
+                  ?.termination_reason && (
+                  <span className="table-subtext">
+                    {run.executions
+                      .find((execution) => execution.termination_reason)
+                      ?.termination_reason?.replaceAll('_', ' ')}
+                  </span>
+                )}
               </td>
               <td>
                 {run.executions
@@ -78,7 +87,12 @@ export function RunTable({ runs }: { runs: Run[] }) {
                   .join(', ') || 'Preparing'}
               </td>
               <td>{date(run.created_at)}</td>
-              <td>{run.parallel ? 'Parallel' : 'Sequential'}</td>
+              <td>
+                <span className="run-policy">
+                  {run.threshold_mode === 'hard' ? 'Hard limit' : 'Graceful stop'}
+                </span>
+                <span className="table-subtext">{run.parallel ? 'Parallel' : 'Sequential'}</span>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -92,12 +106,10 @@ export function RunsPage() {
   return (
     <>
       <PageTitle
-        eyebrow="Autonomous work"
         title="Runs"
-        description="Every execution has a workspace, a budget, and a record of what happened."
         actions={
           <Link className="button primary" href="/prepare">
-            ▶ Prepare run
+            <Icon name="play" /> Prepare run
           </Link>
         }
       />
@@ -119,11 +131,7 @@ export function PrepareRunPage({ selectedProject }: { selectedProject?: string }
   );
   return (
     <>
-      <PageTitle
-        eyebrow="Put available usage to work"
-        title="Prepare a run"
-        description="Choose projects, tune their models, and define when work should stop."
-      />
+      <PageTitle title="Prepare a run" />
       <RunBuilder
         selectedProject={selectedProject}
         draftContext={{ mode, name, cron, timezone }}
@@ -269,6 +277,7 @@ export function RunBuilder({
   );
   return (
     <form
+      className="run-builder"
       onSubmit={(e) => {
         e.preventDefault();
         if (configs.length && conditions.length)
@@ -288,258 +297,273 @@ export function RunBuilder({
           );
       }}
     >
-      <section className="panel">
-        <div className="row between">
-          <h2>
-            <span className="step-number">1</span> Choose projects
-          </h2>
-          <span className="muted small">{configs.length} selected</span>
+      <div className="builder-layout">
+        <div className="builder-main">
+          <section className="panel builder-projects">
+            <div className="row between">
+              <h2>
+                <span className="step-number">1</span> Choose projects
+              </h2>
+              <span className="muted small">{configs.length} selected</span>
+            </div>
+            <ErrorNotice error={projects.error} />
+            {!projects.data && <Loading />}
+            {projects.data?.length === 0 && (
+              <Empty
+                title="Create a project first"
+                action={
+                  <Link className="button" href="/projects">
+                    Go to projects
+                  </Link>
+                }
+              >
+                Projects keep their source code, environment, and progress between runs.
+              </Empty>
+            )}
+            <div className="run-projects">
+              {projects.data?.map((project) => {
+                const config = configs.find((item) => item.project_id === project.id);
+                const patch = (values: Partial<ProjectConfig>) =>
+                  setConfigs((old) =>
+                    old.map((item) =>
+                      item.project_id === project.id ? { ...item, ...values } : item,
+                    ),
+                  );
+                return (
+                  <div className={`run-project ${config ? 'selected' : ''}`} key={project.id}>
+                    <label className="checkbox project-select">
+                      <input
+                        type="checkbox"
+                        checked={!!config}
+                        onChange={(e) => toggleProject(project, e.target.checked)}
+                      />
+                      <span>
+                        <strong>{project.name}</strong>
+                        <span className="small muted clipped">{project.description}</span>
+                      </span>
+                    </label>
+                    <Badge status={project.status} />
+                    {config && (
+                      <>
+                        <ModelSelector
+                          model={config.model}
+                          effort={config.reasoning_effort}
+                          onChange={patch}
+                        />
+                        <GitHubRunWarning id={project.id} />
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <label className="checkbox top-space">
+              <input
+                type="checkbox"
+                checked={parallel}
+                onChange={(e) => setParallel(e.target.checked)}
+              />
+              <span>Run projects in parallel</span>
+            </label>
+          </section>
+          <div className="builder-timing">{children}</div>
         </div>
-        <ErrorNotice error={projects.error} />
-        {!projects.data && <Loading />}
-        {projects.data?.length === 0 && (
-          <Empty
-            title="Create a project first"
-            action={
-              <Link className="button" href="/projects">
-                Go to projects
-              </Link>
-            }
-          >
-            Projects keep their source code, environment, and progress between runs.
-          </Empty>
-        )}
-        <div className="run-projects">
-          {projects.data?.map((project) => {
-            const config = configs.find((item) => item.project_id === project.id);
-            const patch = (values: Partial<ProjectConfig>) =>
-              setConfigs((old) =>
-                old.map((item) => (item.project_id === project.id ? { ...item, ...values } : item)),
-              );
-            return (
-              <div className={`run-project ${config ? 'selected' : ''}`} key={project.id}>
-                <label className="checkbox project-select">
-                  <input
-                    type="checkbox"
-                    checked={!!config}
-                    onChange={(e) => toggleProject(project, e.target.checked)}
-                  />
+        <div className="builder-side">
+          <section className="panel builder-limits">
+            <h2>
+              <span className="step-number">2</span> When to stop
+            </h2>
+            <p className="muted">The first condition reached stops the run.</p>
+            <ErrorNotice error={usage.error} />
+            <div className="conditions">
+              {observed.map((window, index) => {
+                const condition = conditions.find((item) => sameWindow(item, window));
+                return (
+                  <div className="condition-row" key={`${window.limit_id}-${index}`}>
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={!!condition}
+                        onChange={(e) =>
+                          setConditions((old) =>
+                            e.target.checked
+                              ? [
+                                  ...old,
+                                  {
+                                    kind: 'usage',
+                                    limit_id: window.limit_id,
+                                    window_minutes: window.window_minutes!,
+                                    used_percent: 95,
+                                  },
+                                ]
+                              : old.filter((item) => !sameWindow(item, window)),
+                          )
+                        }
+                      />
+                      <span>
+                        {window.name || window.limit_id} · {duration(window.window_minutes)} window
+                        reaches
+                        <small className="condition-observation">
+                          {window.used_percent.toFixed(1)}% used now
+                          {window.resets_at && ` · Resets ${date(window.resets_at)}`}
+                        </small>
+                      </span>
+                    </label>
+                    <label className="number-inline">
+                      <span className="sr-only">Usage threshold percent</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        step={0.1}
+                        required={!!condition}
+                        disabled={!condition}
+                        value={condition?.kind === 'usage' ? condition.used_percent : 95}
+                        onChange={(e) =>
+                          setConditions((old) =>
+                            old.map((item) =>
+                              sameWindow(item, window)
+                                ? { ...item, used_percent: Number(e.target.value) }
+                                : item,
+                            ),
+                          )
+                        }
+                      />
+                      <span>% used</span>
+                    </label>
+                  </div>
+                );
+              })}
+              {!observed.length && (
+                <p className="small muted">
+                  Usage rules become available after Codex reports your account’s window metadata.
+                  You can use a runtime limit in the meantime.
+                </p>
+              )}
+              {unavailable.map((condition, index) => (
+                <div className="condition-row" key={index}>
                   <span>
-                    <strong>{project.name}</strong>
-                    <span className="small muted clipped">{project.description}</span>
+                    {conditionLabel(condition)}{' '}
+                    <span className="muted small">(not currently observed)</span>
                   </span>
-                </label>
-                {config && (
-                  <>
-                    <ModelSelector
-                      model={config.model}
-                      effort={config.reasoning_effort}
-                      onChange={patch}
-                    />
-                    <GitHubRunWarning id={project.id} />
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <label className="checkbox top-space">
-          <input
-            type="checkbox"
-            checked={parallel}
-            onChange={(e) => setParallel(e.target.checked)}
-          />
-          <span>Run projects in parallel, within the configured concurrency limit</span>
-        </label>
-      </section>
-      <section className="panel">
-        <h2>
-          <span className="step-number">2</span> Stop when any condition is met
-        </h2>
-        <p className="muted">
-          Usage thresholds are monitored during work. Projects stop starting new work at the
-          boundary.
-        </p>
-        <ErrorNotice error={usage.error} />
-        {!!usage.data?.length && <UsageCards windows={usage.data} />}
-        <div className="conditions">
-          {observed.map((window, index) => {
-            const condition = conditions.find((item) => sameWindow(item, window));
-            return (
-              <div className="condition-row" key={`${window.limit_id}-${index}`}>
+                  <button
+                    type="button"
+                    className="quiet"
+                    onClick={() => setConditions((old) => old.filter((item) => item !== condition))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <div className="condition-row">
                 <label className="checkbox">
                   <input
                     type="checkbox"
-                    checked={!!condition}
+                    checked={!!elapsed}
                     onChange={(e) =>
                       setConditions((old) =>
                         e.target.checked
                           ? [
-                              ...old,
-                              {
-                                kind: 'usage',
-                                limit_id: window.limit_id,
-                                window_minutes: window.window_minutes!,
-                                used_percent: 95,
-                              },
+                              ...old.filter((item) => item.kind !== 'elapsed'),
+                              { kind: 'elapsed', seconds: 14400 },
                             ]
-                          : old.filter((item) => !sameWindow(item, window)),
+                          : old.filter((item) => item.kind !== 'elapsed'),
                       )
                     }
                   />
-                  <span>
-                    {window.name || window.limit_id} · {duration(window.window_minutes)} window
-                    reaches
-                  </span>
+                  <span>Elapsed runtime reaches</span>
                 </label>
                 <label className="number-inline">
-                  <span className="sr-only">Usage threshold percent</span>
+                  <span className="sr-only">Runtime limit in hours</span>
                   <input
                     type="number"
-                    min={1}
-                    max={100}
-                    step={0.1}
-                    required={!!condition}
-                    disabled={!condition}
-                    value={condition?.kind === 'usage' ? condition.used_percent : 95}
+                    min={0.0167}
+                    max={168}
+                    step="any"
+                    disabled={!elapsed}
+                    required={!!elapsed}
+                    value={elapsed?.kind === 'elapsed' ? elapsed.seconds / 3600 : 4}
                     onChange={(e) =>
                       setConditions((old) =>
                         old.map((item) =>
-                          sameWindow(item, window)
-                            ? { ...item, used_percent: Number(e.target.value) }
+                          item.kind === 'elapsed'
+                            ? {
+                                kind: 'elapsed',
+                                seconds: Math.round(Number(e.target.value) * 3600),
+                              }
                             : item,
                         ),
                       )
                     }
                   />
-                  <span>% used</span>
+                  <span>hours</span>
                 </label>
               </div>
-            );
-          })}
-          {!observed.length && (
-            <p className="small muted">
-              Usage rules become available after Codex reports your account’s window metadata. You
-              can use a runtime limit in the meantime.
-            </p>
-          )}
-          {unavailable.map((condition, index) => (
-            <div className="condition-row" key={index}>
-              <span>
-                {conditionLabel(condition)}{' '}
-                <span className="muted small">(not currently observed)</span>
-              </span>
-              <button
-                type="button"
-                className="quiet"
-                onClick={() => setConditions((old) => old.filter((item) => item !== condition))}
-              >
-                Remove
-              </button>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={conditions.some((item) => item.kind === 'provider_limit')}
+                  onChange={(e) => toggleCondition('provider_limit', e.target.checked)}
+                />
+                <span>Provider usage limit prevents further work</span>
+              </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={conditions.some((item) => item.kind === 'project_completed')}
+                  onChange={(e) => toggleCondition('project_completed', e.target.checked)}
+                />
+                <span>Project is complete</span>
+              </label>
             </div>
-          ))}
-          <div className="condition-row">
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={!!elapsed}
-                onChange={(e) =>
-                  setConditions((old) =>
-                    e.target.checked
-                      ? [
-                          ...old.filter((item) => item.kind !== 'elapsed'),
-                          { kind: 'elapsed', seconds: 14400 },
-                        ]
-                      : old.filter((item) => item.kind !== 'elapsed'),
-                  )
-                }
-              />
-              <span>Elapsed runtime reaches</span>
-            </label>
-            <label className="number-inline">
-              <span className="sr-only">Runtime limit in hours</span>
-              <input
-                type="number"
-                min={0.0167}
-                max={168}
-                step="any"
-                disabled={!elapsed}
-                required={!!elapsed}
-                value={elapsed?.kind === 'elapsed' ? elapsed.seconds / 3600 : 4}
-                onChange={(e) =>
-                  setConditions((old) =>
-                    old.map((item) =>
-                      item.kind === 'elapsed'
-                        ? { kind: 'elapsed', seconds: Math.round(Number(e.target.value) * 3600) }
-                        : item,
-                    ),
-                  )
-                }
-              />
-              <span>hours</span>
-            </label>
-          </div>
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={conditions.some((item) => item.kind === 'provider_limit')}
-              onChange={(e) => toggleCondition('provider_limit', e.target.checked)}
-            />
-            <span>Provider usage limit prevents further work</span>
-          </label>
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={conditions.some((item) => item.kind === 'project_completed')}
-              onChange={(e) => toggleCondition('project_completed', e.target.checked)}
-            />
-            <span>Project is complete</span>
-          </label>
+          </section>
+          <section className="panel builder-policy">
+            <h3>At the usage boundary</h3>
+            <div className="threshold-options">
+              <label className="checkbox">
+                <input
+                  type="radio"
+                  name="threshold-mode"
+                  checked={thresholdMode === 'graceful'}
+                  onChange={() => setThresholdMode('graceful')}
+                />
+                <span>
+                  <strong>Graceful stop</strong>
+                  <span className="hint">
+                    Save a checkpoint and settle current work. Up to 90 seconds to finish; may go
+                    slightly over the limit.
+                  </span>
+                </span>
+              </label>
+              <label className="checkbox">
+                <input
+                  type="radio"
+                  name="threshold-mode"
+                  checked={thresholdMode === 'hard'}
+                  onChange={() => setThresholdMode('hard')}
+                />
+                <span>
+                  <strong>Hard limit</strong>
+                  <span className="hint">
+                    Interrupt as soon as the limit is observed. No extra model work. Provider usage
+                    updates may arrive late.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </section>
         </div>
-      </section>
-      <section className="panel">
-        <h3>When a usage limit is reached</h3>
-        <label className="checkbox">
-          <input
-            type="radio"
-            name="threshold-mode"
-            checked={thresholdMode === 'graceful'}
-            onChange={() => setThresholdMode('graceful')}
-          />
-          <span>
-            <strong>Graceful stop</strong>
-            <span className="hint">
-              Ask the agent to wrap up and save a checkpoint. May go slightly past the usage limit
-              while finishing (up to 90 seconds).
-            </span>
-          </span>
-        </label>
-        <label className="checkbox">
-          <input
-            type="radio"
-            name="threshold-mode"
-            checked={thresholdMode === 'hard'}
-            onChange={() => setThresholdMode('hard')}
-          />
-          <span>
-            <strong>Hard limit</strong>
-            <span className="hint">
-              Interrupt when the threshold is observed. No finalization turn. Provider updates can
-              arrive after the threshold is crossed.
-            </span>
-          </span>
-        </label>
-      </section>
-      {children}
+      </div>
+
       <UnsavedNotice dirty={draft.dirty} />
       <ActionNotice {...action} />
       <div className="run-submit">
         <p className="small muted">
-          Agents have full administrative access inside their VMs and work without command
-          approvals.
+          {configs.length} {configs.length === 1 ? 'project' : 'projects'} selected ·{' '}
+          {thresholdMode === 'hard' ? 'Hard limit' : 'Graceful stop'}
         </p>
         <button className="primary" disabled={action.busy || !configs.length || !conditions.length}>
-          {action.busy ? 'Saving…' : submitLabel} <span aria-hidden="true">→</span>
+          {action.busy ? 'Saving…' : submitLabel} <Icon name="arrow" />
         </button>
       </div>
     </form>
@@ -552,7 +576,7 @@ export function RunPage({ id }: { id: string }) {
   const usage = useResource<UsageWindow[]>('/usage');
   const { events, connected } = useEvents();
   const action = useAction();
-  const [tab, setTab] = useState<'executions' | 'events'>('executions');
+  const [tab, setTab] = useState<'executions' | 'events'>();
   const log = useMemo(() => {
     const collected = [...(history.data ?? []), ...events.filter((event) => event.run_id === id)];
     const seen = new Set<string>();
@@ -573,15 +597,18 @@ export function RunPage({ id }: { id: string }) {
       </>
     );
   const data = run.data;
+  const selectedTab = tab ?? (terminal.has(data.status) ? 'executions' : 'events');
   return (
     <>
       <Link href="/runs" className="back-link">
         ← Runs
       </Link>
       <PageTitle
-        eyebrow="Run detail"
-        title={`Run ${shortId(id)}`}
-        description={`Created ${date(data.created_at)}`}
+        title={
+          <>
+            Run <code className="heading-id">{shortId(id)}</code>
+          </>
+        }
         actions={
           <>
             <Badge status={data.status} />
@@ -610,10 +637,12 @@ export function RunPage({ id }: { id: string }) {
             <dt>Started</dt>
             <dd>{date(data.started_at)}</dd>
           </div>
-          <div>
-            <dt>Finished</dt>
-            <dd>{date(data.finished_at)}</dd>
-          </div>
+          {data.finished_at && (
+            <div>
+              <dt>Finished</dt>
+              <dd>{date(data.finished_at)}</dd>
+            </div>
+          )}
           <div>
             <dt>Execution</dt>
             <dd>{data.parallel ? 'Parallel' : 'Sequential'}</dd>
@@ -624,7 +653,10 @@ export function RunPage({ id }: { id: string }) {
           </div>
         </dl>
         <div className="stop-chips">
-          <span className="small muted">Stop when ANY:</span>
+          <span className="small muted">Stop policy</span>
+          <span className="chip">
+            {data.threshold_mode === 'hard' ? 'Hard limit' : 'Graceful stop'}
+          </span>
           {data.stop_conditions.map((condition, index) => (
             <span className="chip" key={index}>
               {conditionLabel(condition)}
@@ -632,19 +664,26 @@ export function RunPage({ id }: { id: string }) {
           ))}
         </div>
       </section>
-      {!!usage.data?.length && <UsageCards windows={usage.data} />}
-      <nav className="tabs" aria-label="Run sections">
+      {!!usage.data?.length && (
+        <div className="run-usage">
+          <UsageCards windows={usage.data} />
+        </div>
+      )}
+      <nav className="tabs run-tabs" aria-label="Run sections">
         <button
-          className={tab === 'executions' ? 'active' : ''}
+          className={selectedTab === 'executions' ? 'active' : ''}
           onClick={() => setTab('executions')}
         >
           Executions & reports
         </button>
-        <button className={tab === 'events' ? 'active' : ''} onClick={() => setTab('events')}>
+        <button
+          className={selectedTab === 'events' ? 'active' : ''}
+          onClick={() => setTab('events')}
+        >
           Activity <span className={`status-dot ${connected ? 'online' : ''}`} />
         </button>
       </nav>
-      {tab === 'executions' ? (
+      {selectedTab === 'executions' ? (
         <div className="execution-list">
           {data.executions.map((execution) => (
             <section className="panel" key={execution.id}>
@@ -692,16 +731,12 @@ export function RunPage({ id }: { id: string }) {
           ))}
         </div>
       ) : (
-        <section className="panel">
+        <section className="panel activity-panel">
           <div className="row between">
-            <h2>Execution events</h2>
-            <span className="tiny muted">
-              {connected
-                ? 'Live connection'
-                : !terminal.has(data.status)
-                  ? 'Activity connection lost — reconnecting…'
-                  : 'Saved activity'}{' '}
-              · Last {log.length} events
+            <h2>Activity</h2>
+            <span className="tiny muted activity-connection">
+              {connected ? 'Live' : !terminal.has(data.status) ? 'Reconnecting…' : 'Saved activity'}{' '}
+              · {log.length} events
             </span>
           </div>
           <ErrorNotice error={history.error} />
@@ -771,12 +806,10 @@ export function SchedulesPage() {
   return (
     <>
       <PageTitle
-        eyebrow="Keep work moving"
         title="Schedules"
-        description="Recurring triggers create ordinary runs with the same project settings and limits."
         actions={
           <Link className="button primary" href="/prepare">
-            + New schedule
+            <Icon name="plus" /> New schedule
           </Link>
         }
       />
@@ -789,14 +822,14 @@ export function SchedulesPage() {
       ) : !schedules.data.length ? (
         <section className="panel">
           <Empty
-            title="Work while you’re away"
+            title="No schedules yet"
             action={
               <Link className="button" href="/prepare">
                 Prepare a scheduled run
               </Link>
             }
           >
-            A timezone-aware schedule can put unused capacity to work every day.
+            Set a time and reuse your run configuration.
           </Empty>
         </section>
       ) : (

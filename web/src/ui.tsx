@@ -1,3 +1,4 @@
+import { Icon } from './icons';
 import { createContext, useContext } from 'react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import type { Execution, Report, StopCondition, UsageWindow } from './types';
@@ -39,7 +40,7 @@ export function PageTitle({
   actions,
 }: {
   eyebrow?: string;
-  title: string;
+  title: ReactNode;
   description?: string;
   actions?: ReactNode;
 }) {
@@ -88,10 +89,10 @@ export function Empty({
   return (
     <div className="empty">
       <span className="empty-mark" aria-hidden="true">
-        ↘
+        <Icon name="folder" />
       </span>
       <h3>{title}</h3>
-      {children && <p className="muted">{children}</p>}
+      {children && <div className="empty-description muted">{children}</div>}
       {action}
     </div>
   );
@@ -100,12 +101,22 @@ export function Empty({
 export function Loading() {
   return (
     <div role="status" className="loading">
-      <span className="spinner" /> Loading…
+      <span className="spinner" />
+      <span>Loading…</span>
+      <span className="loading-bars" aria-hidden="true">
+        <i />
+        <i />
+      </span>
     </div>
   );
 }
 export function Badge({ status }: { status: string }) {
-  return <span className={`badge status-${status}`}>{status.replaceAll('_', ' ')}</span>;
+  return (
+    <span className={`badge status-${status}`}>
+      <span className="badge-dot" aria-hidden="true" />
+      {status.replaceAll('_', ' ')}
+    </span>
+  );
 }
 export function shortId(id: string) {
   return id.slice(0, 8);
@@ -155,16 +166,14 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
     <div className="usage-grid">
       {windows.map((window, index) => (
         <article
-          className="usage-card"
+          className={`usage-card ${window.used_percent >= 90 ? 'near-limit' : ''}`}
           key={`${window.limit_id}-${window.window_minutes}-${index}`}
         >
           <div className="row between">
             <span className="small-label">
-              {window.window_minutes === 300
-                ? '5-hour'
-                : window.window_minutes === 10080
-                  ? 'Weekly'
-                  : window.name || window.limit_id}
+              <Icon name="usage" />
+              {window.name ||
+                (window.window_minutes === 10080 ? 'Weekly' : duration(window.window_minutes))}
             </span>
             <div className="usage-total">
               <span className="usage-value">
@@ -189,11 +198,16 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
           </div>
           <div className="row between muted tiny">
             <span>
-              {Math.max(0, 100 - window.used_percent).toFixed(1)}% remaining ·{' '}
+              {Math.max(0, 100 - window.used_percent).toFixed(1)}% left ·{' '}
               {duration(window.window_minutes)} window
             </span>
-            <span title={window.resets_at ? date(window.resets_at) : undefined}>
-              {window.resets_at ? `Resets ${resetIn(window.resets_at)}` : 'Reset not supplied'}
+            <span className="usage-reset">
+              <span>
+                {window.resets_at ? `Resets ${resetIn(window.resets_at)}` : 'Reset not supplied'}
+              </span>
+              {window.resets_at && (
+                <time dateTime={window.resets_at}>{date(window.resets_at)}</time>
+              )}
             </span>
           </div>
         </article>
@@ -202,7 +216,13 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
   );
 }
 
-export function ReportView({ report }: { report?: Report | null }) {
+export function ReportView({
+  report,
+  title = 'Last agent checkpoint',
+}: {
+  report?: Report | null;
+  title?: string;
+}) {
   if (!report)
     return <Empty title="No report yet">No valid agent checkpoint has been produced yet.</Empty>;
   const sections = [
@@ -213,7 +233,7 @@ export function ReportView({ report }: { report?: Report | null }) {
   return (
     <div className="report">
       <div className="row between">
-        <h3>Last agent checkpoint</h3>
+        <h3>{title}</h3>
         <Badge status={report.status} />
       </div>
       <p className="preserve">{report.summary}</p>
@@ -228,20 +248,22 @@ export function ReportView({ report }: { report?: Report | null }) {
         </div>
       )}
       <div className="report-columns">
-        {sections.map((section) => (
-          <section key={section.title}>
-            <h4>{section.title}</h4>
-            {section.items?.length ? (
-              <ul className="plain-list">
-                {section.items.map((item, index) => (
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="muted small">None reported.</p>
-            )}
-          </section>
-        ))}
+        {sections
+          .filter((section) => section.items?.length)
+          .map((section) => (
+            <section key={section.title}>
+              <h4>{section.title}</h4>
+              {section.items?.length ? (
+                <ul className="plain-list">
+                  {section.items.map((item, index) => (
+                    <li key={index}>{item}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted small">None reported.</p>
+              )}
+            </section>
+          ))}
       </div>
       {report.suggested_next_action && (
         <div className="callout">
@@ -290,7 +312,18 @@ export function ExecutionOutcome({ execution }: { execution?: Execution | null }
                 ? 'Infrastructure failure'
                 : execution.status.replaceAll('_', ' ');
   return (
-    <div className="execution-outcome">
+    <div className={`execution-outcome outcome-${execution.status}`}>
+      <Icon
+        name={
+          execution.status === 'completed'
+            ? 'checkpoint'
+            : reason === 'usage_threshold'
+              ? 'stop'
+              : execution.status === 'failed'
+                ? 'alert'
+                : 'clock'
+        }
+      />
       <strong>{label.toUpperCase()}</strong>
       {execution.finished_at && (
         <p className="muted small">Run stopped {date(execution.finished_at)}</p>

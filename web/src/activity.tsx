@@ -1,3 +1,4 @@
+import { Icon } from './icons';
 import { useEffect, useRef, useState } from 'react';
 import type { Execution, LiveEvent, Report } from './types';
 import { ReportView } from './ui';
@@ -58,7 +59,7 @@ function ActivityCard({ event }: { event: LiveEvent }) {
   if (event.type === 'agent.checkpoint' && data.report)
     return (
       <div className="activity-checkpoint">
-        <ReportView report={data.report} />
+        <ReportView report={data.report} title="Checkpoint" />
       </div>
     );
   if (event.type === 'command') {
@@ -71,7 +72,7 @@ function ActivityCard({ event }: { event: LiveEvent }) {
           {failed
             ? 'Command failed'
             : data.status === 'completed'
-              ? 'Command ✓'
+              ? 'Command completed'
               : `Command · ${data.status || 'finished'}`}
         </strong>
         <pre className="command-line">{data.command || event.message}</pre>
@@ -100,10 +101,12 @@ function ActivityCard({ event }: { event: LiveEvent }) {
   if (event.type === 'files.changed')
     return (
       <div>
-        <strong>Files changed</strong>
+        <strong>
+          Files changed <span className="count">{data.changes?.length ?? 0}</span>
+        </strong>
         {data.changes?.map((change, i) => (
           <div className="file-change" key={i}>
-            <code>{change.path}</code>
+            <code title={change.path}>{change.path.replace(/^\/workspace\//, '')}</code>
             {change.kind?.type && <span className="muted tiny"> · {change.kind.type}</span>}
             {change.diff && (
               <details>
@@ -145,7 +148,7 @@ function ActivityCard({ event }: { event: LiveEvent }) {
       ? 'Agent'
       : event.type === 'execution.state'
         ? 'Execution'
-        : event.type.includes('error')
+        : event.type.includes('error') || /^\w*(?:Error|Exception):/.test(event.message || '')
           ? 'Error'
           : 'Activity';
   return (
@@ -196,17 +199,27 @@ export function ActivityTimeline({
   return (
     <>
       <div className="row between wrap activity-controls">
-        <label>
-          Project
-          <select value={project} onChange={(e) => setProject(e.target.value)}>
-            <option value="all">All</option>
-            {executions.map((x) => (
-              <option key={x.id} value={x.project_id}>
-                {x.project_name || x.project_id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="activity-projects" role="group" aria-label="Filter activity by project">
+          <button
+            className={project === 'all' ? 'selected' : ''}
+            aria-pressed={project === 'all'}
+            onClick={() => setProject('all')}
+          >
+            All
+          </button>
+          {Array.from(
+            new Map(executions.map((execution) => [execution.project_id, execution])).values(),
+          ).map((execution) => (
+            <button
+              key={execution.project_id}
+              className={project === execution.project_id ? 'selected' : ''}
+              aria-pressed={project === execution.project_id}
+              onClick={() => setProject(execution.project_id)}
+            >
+              {execution.project_name || execution.project_id.slice(0, 8)}
+            </button>
+          ))}
+        </div>
         <label className="checkbox">
           <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} />
           Raw events
@@ -226,7 +239,10 @@ export function ActivityTimeline({
             (x) => x.id === e.execution_id || x.project_id === e.project_id,
           );
           return (
-            <article className="activity-row" key={`${e.id}-${i}`}>
+            <article
+              className={`activity-row activity-${e.type.replaceAll('.', '-')} ${e.type === 'command' && ((e.data?.exitCode != null && e.data.exitCode !== 0) || e.data?.status === 'failed') ? 'activity-failed' : ''}`}
+              key={`${e.id}-${i}`}
+            >
               <div className="activity-meta">
                 <time>{e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '—'}</time>
                 {project === 'all' && execution && (
@@ -235,7 +251,28 @@ export function ActivityTimeline({
                   </span>
                 )}
               </div>
-              <div>
+              <span className="activity-marker">
+                <Icon
+                  name={
+                    e.type === 'agent.checkpoint'
+                      ? 'checkpoint'
+                      : e.type === 'command'
+                        ? 'terminal'
+                        : e.type === 'files.changed'
+                          ? 'files'
+                          : e.type === 'agent.progress'
+                            ? 'agent'
+                            : e.type === 'execution.usage_stop'
+                              ? 'stop'
+                              : e.type === 'usage.updated'
+                                ? 'usage'
+                                : e.type.includes('error')
+                                  ? 'alert'
+                                  : 'clock'
+                  }
+                />
+              </span>
+              <div className="activity-body">
                 {raw ? (
                   <details>
                     <summary>
@@ -263,7 +300,12 @@ export function ActivityTimeline({
           className="jump-latest"
           onClick={() => {
             setFollowing(true);
-            viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: 'smooth' });
+            viewport.current?.scrollTo({
+              top: viewport.current.scrollHeight,
+              behavior: matchMedia('(prefers-reduced-motion: reduce)').matches
+                ? 'instant'
+                : 'smooth',
+            });
           }}
         >
           ↓ Jump to latest

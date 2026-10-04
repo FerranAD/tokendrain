@@ -1,6 +1,7 @@
+import { Icon as NavIcon } from './icons';
 import { StrictMode, useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, EventsProvider, mutate, useAction, useResource } from './api';
+import { api, EventsProvider, mutate, useAction, useResource, useEvents } from './api';
 import { NewProject, ProjectCards, ProjectPage, ProjectsPage } from './projects';
 import { PrepareRunPage, RunPage, RunsPage, RunTable, SchedulesPage } from './runs';
 import { SettingsPage } from './settings';
@@ -16,7 +17,7 @@ import {
   PageTitle,
   UsageCards,
 } from './ui';
-import './style.css';
+import './design.css';
 import { ThemeControl } from './theme';
 import { confirmDiscardChanges } from './drafts';
 
@@ -159,45 +160,6 @@ const navigation = [
   { path: '/settings', label: 'Settings', icon: 'settings' },
 ];
 
-function NavIcon({ name }: { name: string }) {
-  const shapes: Record<string, React.ReactNode> = {
-    grid: (
-      <>
-        <rect x="3" y="3" width="7" height="7" rx="1" />
-        <rect x="14" y="3" width="7" height="7" rx="1" />
-        <rect x="3" y="14" width="7" height="7" rx="1" />
-        <rect x="14" y="14" width="7" height="7" rx="1" />
-      </>
-    ),
-    folder: <path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9H3Z" />,
-    play: (
-      <>
-        <circle cx="12" cy="12" r="9" />
-        <path d="m10 8 6 4-6 4Z" />
-      </>
-    ),
-    clock: (
-      <>
-        <rect x="3" y="5" width="18" height="16" rx="2" />
-        <path d="M7 3v4m10-4v4M3 11h18m-9 3v3h3" />
-      </>
-    ),
-    settings: (
-      <>
-        <path d="M4 6h16M4 12h16M4 18h16" />
-        <circle cx="8" cy="6" r="2" />
-        <circle cx="16" cy="12" r="2" />
-        <circle cx="10" cy="18" r="2" />
-      </>
-    ),
-  };
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      {shapes[name]}
-    </svg>
-  );
-}
-
 function Shell({ path, onSignOut }: { path: string; onSignOut: () => void }) {
   const session = useResource<{ auth_mode: string }>('/session');
   const action = useAction();
@@ -275,6 +237,18 @@ function Shell({ path, onSignOut }: { path: string; onSignOut: () => void }) {
         </div>
       </aside>
       <main id="main" tabIndex={-1}>
+        <div className="app-context">
+          <span>tokendrain</span>
+          <NavIcon name="chevron" />
+          <span>
+            {route === '/'
+              ? 'Dashboard'
+              : route.startsWith('/prepare')
+                ? 'Prepare run'
+                : navigation.find((item) => item.path !== '/' && route.startsWith(item.path))
+                    ?.label}
+          </span>
+        </div>
         {content}
       </main>
     </div>
@@ -288,6 +262,7 @@ function Dashboard() {
   const usage = useResource<UsageWindow[]>('/usage');
   const system = useResource<SystemInfo>('/system');
   const [creating, setCreating] = useState(false);
+  const { events } = useEvents();
   const active =
     runs.data?.filter(
       (run) => !['completed', 'failed', 'cancelled', 'blocked', 'stopped'].includes(run.status),
@@ -295,19 +270,18 @@ function Dashboard() {
   return (
     <>
       <PageTitle
-        title="Usage & runs"
-        description="Current usage, active runs, and what’s next."
+        title="Dashboard"
         actions={
           <Link className="button primary" href="/prepare">
             <NavIcon name="play" /> Prepare run
           </Link>
         }
       />
-      <section className="dashboard-section">
+      <section className="dashboard-section dashboard-usage">
         <div className="section-heading">
           <h2>Usage limits</h2>
           <Link className="text-link" href="/settings">
-            Manage connection ↗
+            Account settings
           </Link>
         </div>
         <ErrorNotice error={usage.error} />
@@ -337,78 +311,117 @@ function Dashboard() {
         </div>
       </div>
       {active > 0 && (
-        <section className="panel">
-          <h2>Active Runs</h2>
-          <RunTable
-            runs={
-              runs.data?.filter(
-                (r) =>
-                  !['completed', 'failed', 'cancelled', 'blocked', 'stopped'].includes(r.status),
-              ) || []
-            }
-          />
+        <section className="dashboard-section dashboard-active">
+          <div className="section-heading">
+            <h2>
+              <span className="live-dot" /> Working now
+            </h2>
+            <span className="tiny muted">
+              {active} active {active === 1 ? 'run' : 'runs'}
+            </span>
+          </div>
+          {runs.data
+            ?.filter(
+              (run) =>
+                !['completed', 'failed', 'cancelled', 'blocked', 'stopped'].includes(run.status),
+            )
+            .map((run) => {
+              const latest = events
+                .filter(
+                  (event) =>
+                    event.run_id === run.id &&
+                    ['agent.progress', 'command', 'execution.state'].includes(event.type),
+                )
+                .at(-1);
+              return (
+                <Link className="active-run-card" key={run.id} href={`/runs/${run.id}`}>
+                  <span className="active-run-icon">
+                    <NavIcon name="terminal" />
+                  </span>
+                  <div>
+                    <strong>
+                      {run.executions
+                        .map(
+                          (execution) => execution.project_name || execution.project_id.slice(0, 8),
+                        )
+                        .join(' · ') || 'Preparing projects'}
+                    </strong>
+                    <p>
+                      {latest?.message ||
+                        run.executions.find((execution) => execution.report)?.report?.summary ||
+                        'Agent is working. Open the run to follow its activity.'}
+                    </p>
+                    <span className="mono tiny muted">
+                      {run.id.slice(0, 8)} · Started {date(run.started_at)}
+                    </span>
+                  </div>
+                  <Badge status={run.status} />
+                  <NavIcon name="chevron" />
+                </Link>
+              );
+            })}
         </section>
       )}
-      <section className="dashboard-section">
-        <div className="section-heading">
-          <h2>
-            Projects <span className="count">{projects.data?.length ?? 0}</span>
-          </h2>
-          <button className="quiet" onClick={() => setCreating((value) => !value)}>
-            + New project
-          </button>
-        </div>
-        {creating && <NewProject close={() => setCreating(false)} />}
-        <ErrorNotice error={projects.error} />
-        {projects.data ? <ProjectCards projects={projects.data} /> : <Loading />}
-      </section>
-      <section className="dashboard-section">
-        <div className="section-heading">
-          <h2>Recent runs</h2>
-          <Link className="text-link" href="/runs">
-            View all runs →
-          </Link>
-        </div>
-        <section className="panel compact">
-          <ErrorNotice error={runs.error} />
-          {runs.data ? <RunTable runs={runs.data.slice(0, 5)} /> : <Loading />}
+      <div className="dashboard-bottom">
+        <section className="dashboard-section">
+          <div className="section-heading">
+            <h2>
+              <Link href="/projects">Projects</Link>{' '}
+              <span className="count">{projects.data?.length ?? 0}</span>
+            </h2>
+            <button className="quiet" onClick={() => setCreating((value) => !value)}>
+              <NavIcon name="plus" /> New project
+            </button>
+          </div>
+          {creating && <NewProject close={() => setCreating(false)} />}
+          <ErrorNotice error={projects.error} />
+          {projects.data ? <ProjectCards projects={projects.data.slice(0, 6)} /> : <Loading />}
         </section>
-      </section>
-      <section className="dashboard-section">
-        <div className="section-heading">
-          <h2>Upcoming schedules</h2>
-          <Link className="text-link" href="/schedules">
-            Manage schedules →
-          </Link>
-        </div>
-        <ErrorNotice error={schedules.error} />
-        <section className="panel compact">
-          {schedules.data?.some((item) => item.enabled) ? (
-            schedules.data
-              .filter((item) => item.enabled)
-              .slice(0, 5)
-              .map((schedule) => (
-                <div className="row between schedule-preview" key={schedule.id}>
-                  <div>
-                    <Link href="/schedules">{schedule.name}</Link>
-                    <p className="tiny muted">
-                      {schedule.cron} · {schedule.timezone}
-                    </p>
-                  </div>
-                  <div className="align-right">
-                    <Badge status="scheduled" />
-                    <p className="tiny muted">{date(schedule.next_run_at)}</p>
-                  </div>
-                </div>
-              ))
-          ) : (
-            <p className="muted small">
-              No enabled schedules. Save a run configuration as a schedule to keep projects moving
-              automatically.
-            </p>
-          )}
+        <section className="dashboard-section">
+          <div className="section-heading">
+            <h2>Recent runs</h2>
+            <Link className="text-link" href="/runs">
+              View all runs →
+            </Link>
+          </div>
+          <section className="panel compact">
+            <ErrorNotice error={runs.error} />
+            {runs.data ? <RunTable runs={runs.data.slice(0, 5)} /> : <Loading />}
+          </section>
         </section>
-      </section>
+        <section className="dashboard-section">
+          <div className="section-heading">
+            <h2>Upcoming schedules</h2>
+            <Link className="text-link" href="/schedules">
+              Manage schedules →
+            </Link>
+          </div>
+          <ErrorNotice error={schedules.error} />
+          <section className="panel compact">
+            {schedules.data?.some((item) => item.enabled) ? (
+              schedules.data
+                .filter((item) => item.enabled)
+                .slice(0, 5)
+                .map((schedule) => (
+                  <div className="row between schedule-preview" key={schedule.id}>
+                    <div>
+                      <Link href="/schedules">{schedule.name}</Link>
+                      <p className="tiny muted">
+                        {schedule.cron} · {schedule.timezone}
+                      </p>
+                    </div>
+                    <div className="align-right">
+                      <Badge status="scheduled" />
+                      <p className="tiny muted">{date(schedule.next_run_at)}</p>
+                    </div>
+                  </div>
+                ))
+            ) : (
+              <p className="muted small">No scheduled runs. Create one from Prepare run.</p>
+            )}
+          </section>
+        </section>
+      </div>
     </>
   );
 }

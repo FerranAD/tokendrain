@@ -1,14 +1,15 @@
+import { Icon } from './icons';
 import { UnsavedNotice, useUnsavedChanges } from './drafts';
 import { useEffect, useState } from 'react';
 import { mutate, useAction, useResource } from './api';
 import type { Task, TaskColumn } from './types';
 import { ActionNotice, ErrorNotice, Loading } from './ui';
 
-const columns: { id: TaskColumn; name: string }[] = [
-  { id: 'backlog', name: 'Backlog' },
-  { id: 'todo', name: 'Todo' },
-  { id: 'in_progress', name: 'In progress' },
-  { id: 'done', name: 'Done' },
+const columns: { id: TaskColumn; name: string; hint: string }[] = [
+  { id: 'backlog', name: 'Backlog', hint: 'Waiting for your approval' },
+  { id: 'todo', name: 'Todo', hint: 'Approved for the agent' },
+  { id: 'in_progress', name: 'In progress', hint: 'Being worked on' },
+  { id: 'done', name: 'Done', hint: 'Shipped and checked' },
 ];
 
 export function Kanban({ id }: { id: string }) {
@@ -54,16 +55,13 @@ export function Kanban({ id }: { id: string }) {
   };
   return (
     <>
-      <div className="row between wrap">
-        <p className="muted small">
-          Moves save automatically. Drag to move or reorder. Backlog needs your approval; agents
-          work In progress, then Todo.
-        </p>
+      <div className="row between wrap board-toolbar">
+        <p className="muted small">Drag to move or reorder. Changes save automatically.</p>
         <button
           className="primary"
           onClick={() => openTask({ title: '', description: '', column: 'todo' })}
         >
-          + Add task
+          <Icon name="plus" /> Add task
         </button>
       </div>
       <ErrorNotice error={resource.error} />
@@ -157,7 +155,7 @@ export function Kanban({ id }: { id: string }) {
             .sort((a, b) => a.position - b.position);
           return (
             <section
-              className={`kanban-column ${dragging ? 'accept-drop' : ''}`}
+              className={`kanban-column column-${column.id} ${dragging ? 'accept-drop' : ''} ${target?.column === column.id ? 'drop-target' : ''}`}
               key={column.id}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -181,6 +179,7 @@ export function Kanban({ id }: { id: string }) {
                 {column.name}
                 <span className="count">{tasks.filter((t) => t.column === column.id).length}</span>
               </h3>
+              <p className="column-hint">{column.hint}</p>
               {cards.map((task, position) => (
                 <div
                   key={task.id}
@@ -198,7 +197,7 @@ export function Kanban({ id }: { id: string }) {
                     <div className="drop-marker" />
                   )}
                   <article
-                    className="task-card"
+                    className={`task-card ${task.id === dragging ? 'dragging' : ''}`}
                     style={{ opacity: task.id === dragging ? 0.3 : 1 }}
                     draggable={!action.busy}
                     onDragStart={(e) => {
@@ -211,13 +210,14 @@ export function Kanban({ id }: { id: string }) {
                       setTarget(null);
                     }}
                   >
+                    <span className="task-id mono">{task.id.slice(0, 6)}</span>
                     <div className="row between">
                       <strong>{task.title}</strong>
                       {task.origin === 'agent' && <span className="ai-tag">AI</span>}
                     </div>
                     {task.description && <p>{task.description}</p>}
                     <button
-                      className="quiet tiny"
+                      className="quiet tiny task-edit"
                       onClick={() =>
                         openTask({
                           id: task.id,
@@ -242,7 +242,7 @@ export function Kanban({ id }: { id: string }) {
                 className="quiet small"
                 onClick={() => openTask({ title: '', description: '', column: column.id })}
               >
-                + Add task
+                <Icon name="plus" /> Add task
               </button>
             </section>
           );
