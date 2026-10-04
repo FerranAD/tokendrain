@@ -104,8 +104,7 @@ function Login({ onAuthenticated }: { onAuthenticated: () => void }) {
     <div className="login-page">
       <div className="login-card">
         <Brand />
-        <div className="eyebrow">Your projects. Your machine.</div>
-        <h1>Welcome back.</h1>
+        <h1>Open your workspace</h1>
         <p className="muted">Enter your host’s administration token to manage projects and runs.</p>
         <form
           onSubmit={(event) => {
@@ -133,10 +132,7 @@ function Login({ onAuthenticated }: { onAuthenticated: () => void }) {
             {action.busy ? 'Connecting…' : 'Open tokendrain →'}
           </button>
         </form>
-        <p className="tiny muted">
-          Use the token configured on the host. Access to this control plane permits autonomous code
-          execution and credential management.
-        </p>
+        <p className="tiny muted">Use the administration token configured on your host.</p>
       </div>
     </div>
   );
@@ -285,9 +281,10 @@ function Dashboard() {
     <>
       <PageTitle
         title="Usage & runs"
+        description="Your allowance, active work, and what’s next."
         actions={
           <Link className="button primary" href="/prepare">
-            ▶ Prepare run
+            <NavIcon name="play" /> Prepare run
           </Link>
         }
       />

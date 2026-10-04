@@ -166,10 +166,14 @@ export function UsageCards({ windows }: { windows: UsageWindow[] }) {
                   ? 'Weekly'
                   : window.name || window.limit_id}
             </span>
+            <span className="usage-window-label">Usage window</span>
+          </div>
+          <div className="usage-total">
             <span className="usage-value">
               {window.used_percent.toFixed(1)}
               <small>%</small>
             </span>
+            <span className="usage-used">used</span>
           </div>
           <div
             className="meter"

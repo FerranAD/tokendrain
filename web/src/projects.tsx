@@ -24,8 +24,8 @@ import { ProjectGitHubPanel } from './settings';
 export function ProjectCards({ projects }: { projects: Project[] }) {
   if (!projects.length)
     return (
-      <Empty title="Give your next project a home">
-        Add a goal. Its workspace, tools, and progress will stay here between runs.
+      <Empty title="No projects yet">
+        Create a project, add approved tasks, and prepare a Run.
       </Empty>
     );
   return (
@@ -34,7 +34,7 @@ export function ProjectCards({ projects }: { projects: Project[] }) {
         <Link className="project-card" href={`/projects/${project.id}`} key={project.id}>
           <div className="row between">
             <span className="project-icon" aria-hidden="true">
-              ⌘
+              {project.name.charAt(0).toUpperCase()}
             </span>
             <Badge status={project.status} />
           </div>
@@ -59,9 +59,8 @@ export function ProjectsPage() {
   return (
     <>
       <PageTitle
-        eyebrow="Persistent work"
         title="Projects"
-        description="A lasting workspace for each goal, ready whenever your usage is available."
+        description="Workspaces, tasks, and checkpoints for your projects."
         actions={
           <button className="primary" onClick={() => setCreating(true)}>
             + New project
