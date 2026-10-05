@@ -69,17 +69,10 @@ test('live daemon: persistent project, secrets, disks, run report, schedule, and
     await page.getByRole('button', { name: 'Import 1 secret' }).click();
     await expect(page.getByRole('textbox', { name: '.env content' })).toHaveValue('');
 
-    await page.getByRole('button', { name: 'Environment', exact: true }).click();
-    await page.getByPlaceholder('Snapshot name (optional)').fill('Browser checkpoint');
-    await page.getByRole('button', { name: 'Create snapshot' }).click();
-    const snapshot = page.locator('.snapshot-row').filter({ hasText: 'Browser checkpoint' });
-    await expect(snapshot).toBeVisible();
-    page.once('dialog', (dialog) => dialog.accept());
-    await snapshot.getByRole('button', { name: 'Restore…' }).click();
-    await expect(snapshot.getByRole('status')).toContainText('Snapshot restored');
-    await page.getByLabel('New size, GiB').fill('42');
-    await page.getByRole('button', { name: 'Resize disk', exact: true }).click();
-    await expect(page.getByRole('status').filter({ hasText: 'Storage resized' })).toBeVisible();
+    await page.getByRole('button', { name: 'VM storage', exact: true }).click();
+    await page.getByLabel('New capacity, GiB').fill('50');
+    await page.getByRole('button', { name: 'Resize', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'VM storage resized' })).toBeVisible();
 
     await page.getByRole('link', { name: 'Prepare run' }).click();
     await page.getByRole('checkbox', { name: 'Elapsed runtime reaches' }).check();

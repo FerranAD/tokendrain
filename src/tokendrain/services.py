@@ -17,7 +17,6 @@ from tokendrain.db.models import (
     Project,
     ProjectExecution,
     ProjectGitHub,
-    ProjectSnapshot,
     ProjectTask,
     Report,
     Run,
@@ -152,8 +151,7 @@ class ProjectService:
                     Project(
                         id=project_id,
                         **values.model_dump(exclude={"initial_tasks"}),
-                        environment_metadata={"size_bytes": storage.environment_bytes},
-                        workspace_metadata={"size_bytes": storage.workspace_bytes},
+                        storage_metadata={"size_bytes": storage.virtual_size_bytes},
                     )
                 )
                 await db.flush()
@@ -225,23 +223,6 @@ class ProjectService:
             )
             if active:
                 raise ValueError("Project has an active or queued execution")
-
-    async def snapshot(
-        self, project_id: str, name: str, run_id: str | None = None
-    ) -> dict[str, Any]:
-        value = await self.storage.snapshot(project_id)
-        row = ProjectSnapshot(
-            id=value.id,
-            project_id=project_id,
-            name=name,
-            run_id=run_id,
-            created_at=value.created_at,
-            environment_bytes=value.environment_bytes,
-            workspace_bytes=value.workspace_bytes,
-        )
-        async with self.sessions.begin() as db:
-            db.add(row)
-        return columns(row)
 
     async def tasks(self, project_id: str) -> list[dict[str, Any]]:
         async with self.sessions() as db:

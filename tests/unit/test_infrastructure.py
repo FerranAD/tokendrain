@@ -43,42 +43,30 @@ class RecordingRunner:
 
 @pytest.fixture
 async def storage(tmp_path: Path) -> FileProjectStorage:
-    return FileProjectStorage(tmp_path, disk_gib=1, runner=RecordingRunner())
+    base = tmp_path / "base.img"
+    base.write_bytes(b"base development machine")
+    return FileProjectStorage(tmp_path, disk_gib=1, runner=RecordingRunner(), base_image=base)
 
 
-def small_disks(storage: FileProjectStorage, project: str) -> None:
+def small_disk(storage: FileProjectStorage, project: str) -> None:
     directory = storage.directory(project)
     directory.mkdir(parents=True)
-    (directory / "environment.img").write_bytes(b"installed tools")
-    (directory / "workspace.img").write_bytes(b"precious work")
+    (directory / "vm.img").write_bytes(b"precious machine")
 
 
-async def test_snapshot_restore_separate_domains(storage: FileProjectStorage) -> None:
+async def test_create_clones_one_machine_and_preserves_existing(
+    storage: FileProjectStorage,
+) -> None:
     project = str(uuid4())
-    small_disks(storage, project)
-    snapshot = await storage.snapshot(project)
-    directory = storage.directory(project)
-    (directory / "workspace.img").write_bytes(b"new work")
-    (directory / "environment.img").write_bytes(b"new tools")
-    await storage.restore(project, snapshot.id, "workspace")
-    assert (directory / "workspace.img").read_bytes() == b"precious work"
-    assert (directory / "environment.img").read_bytes() == b"new tools"
-    await storage.restore(project, snapshot.id)
-    assert (directory / "environment.img").read_bytes() == b"installed tools"
-    assert (await storage.list_snapshots(project))[0].id == snapshot.id
-    await storage.delete_snapshot(project, snapshot.id)
-    assert await storage.list_snapshots(project) == []
-
-
-async def test_restore_recovers_committed_journal(storage: FileProjectStorage) -> None:
-    project = str(uuid4())
-    small_disks(storage, project)
-    directory = storage.directory(project)
-    (directory / "workspace.restore").write_bytes(b"recovered")
-    (directory / "restore.json").write_text('["workspace"]')
-    async with storage.lease(project):
-        assert (directory / "workspace.img").read_bytes() == b"recovered"
-        assert not (directory / "restore.json").exists()
+    info = await storage.create(project)
+    assert info.vm_path.name == "vm.img"
+    assert info.virtual_size_bytes == 1024**3
+    assert isinstance(storage.runner, RecordingRunner)
+    assert any(call[0] == "cp" for call in storage.runner.calls)
+    info.vm_path.write_bytes(b"project changes")
+    await storage.create(project)
+    assert info.vm_path.read_bytes() == b"project changes"
+    assert list(storage.directory(project).iterdir()) == [info.vm_path]
 
 
 async def test_lease_excludes_other_instance_and_is_reentrant(storage: FileProjectStorage) -> None:
@@ -107,22 +95,22 @@ async def test_lease_serializes_async_tasks(storage: FileProjectStorage) -> None
     assert order == [1, 1, 2, 2]
 
 
-async def test_failed_snapshot_does_not_publish_partial(storage: FileProjectStorage) -> None:
+async def test_failed_clone_does_not_publish_machine(storage: FileProjectStorage) -> None:
     project = str(uuid4())
-    small_disks(storage, project)
     assert isinstance(storage.runner, RecordingRunner)
     storage.runner.fail = "cp"
     with pytest.raises(RuntimeError):
-        await storage.snapshot(project)
-    assert await storage.list_snapshots(project) == []
+        await storage.create(project)
+    assert not (storage.directory(project) / "vm.img").exists()
+    assert not (storage.directory(project) / "vm.new").exists()
 
 
 async def test_disk_usage_and_delete(storage: FileProjectStorage) -> None:
     project = str(uuid4())
-    small_disks(storage, project)
+    small_disk(storage, project)
     info = await storage.usage(project)
-    assert info.workspace_bytes == len(b"precious work")
-    assert info.environment_allocated_bytes >= info.environment_bytes
+    assert info.virtual_size_bytes == len(b"precious machine")
+    assert info.allocated_bytes >= info.virtual_size_bytes
     await storage.delete_project(project)
     assert not storage.directory(project).exists()
 

@@ -1,23 +1,26 @@
 # MicroVMs and project storage
 
-Tokendrain boots a fresh Firecracker VM for each project execution. The machine is disposable; the two project disks are durable. Creating a project, running it, taking snapshots, or changing its Kanban board never requires `nixos-rebuild`.
+Every project has a persistent development VM. Tokendrain attaches its current read-only control bundle whenever that VM runs. Creating a project, running it, or changing its Kanban board never requires `nixos-rebuild`.
 
-## Immutable platform, persistent development state
+```text
+Project VM       → persistent
+Tokendrain code  → current every Run
+Credentials      → temporary
+```
 
-The flake uses [microvm.nix](https://github.com/microvm-nix/microvm.nix) to build the NixOS kernel, initial RAM filesystem and immutable EROFS Nix-store image. Tokendrain generates the Firecracker configuration at runtime, so projects are not declared in NixOS configuration.
+## Persistent machine, current control
 
-| Domain | Guest location | Retained across runs |
-| --- | --- | --- |
-| Immutable guest | kernel, initrd, lower `/nix/store` | Replaced when the platform is upgraded |
-| Environment disk | `/persist` | Root home, Nix profiles/database, writable Nix-store overlay, `/var/lib`, `/var/cache`, Codex threads and caches |
-| Workspace disk | `/workspace` | Source tree, Git repositories and project data |
-| Runtime state | `/run/tokendrain` | Discarded when the VM stops |
+Nix builds a base NixOS filesystem once. Project creation cheaply clones it using a reflink or sparse copy, then grows it to the configured total capacity. Each project owns one writable root filesystem. `/workspace` is an ordinary directory within it; `/root`, `/etc`, `/opt`, `/var`, Nix profiles, the Nix database, and project-installed store paths persist naturally between Runs. There is no selected list of retained directories.
 
-The root filesystem is tmpfs. `/root`, `/nix/var`, `/var/lib` and `/var/cache` are bound to directories on the environment disk. A writable overlay combines installed Nix packages with the immutable base. Agent changes to other parts of the ephemeral root filesystem, such as an arbitrary `/etc` edit, do not persist. Store persistent tools/configuration in the home directory, Nix profiles or `/persist`.
+The base includes Git, curl, jq, Nix, Python, Node, Rustup, a C/C++ compiler, CMake, Make and GitHub CLI. The agent has root authority inside its VM and can install tools or change its OS. A project can damage its own machine; an unbootable machine fails its Run clearly. Tokendrain still stops the VMM independently. There is no reset or snapshot workflow.
 
-The guest includes Git, curl, jq, Nix, Python, Node, Rustup, a C/C++ compiler, CMake, Make, GitHub CLI and Codex. It can install additional tools without a host rebuild. The agent has root authority inside its VM. There is no SSH control path and no command approval dialog.
+The host supplies the supported kernel/initrd, the project's writable root disk, and a small read-only control volume. The persistent OS profile supplies userspace; a host upgrade never clones a new machine over an existing project. The stable boot contract mounts the control volume at `/run/tokendrain-control` and executes its `activate` entrypoint.
 
-A platform upgrade changes the immutable lower Nix store. Before an upgrade, stop executions and retain snapshots. If an old persistent Nix overlay no longer works with the new base, reset the environment and retain the workspace. Tokendrain does not use Firecracker RAM snapshots for durable storage.
+The control volume contains a local Nix binary cache for current guestd and Codex, a manifest, and the activation script. Activation uses `nix copy` to import missing closure paths and register their references in the project's own persistent store/database. The control volume is never mounted over `/nix/store`. Current control roots protect the active closure from garbage collection; updates do not delete old paths. Project profiles and references keep their dependencies alive normally.
+
+Activation starts the current guestd and passes an absolute path to the current Codex binary. A project-installed `codex` cannot replace that managed process. Managed credentials remain under `/run/tokendrain` on tmpfs; Codex conversations and non-secret state live in the project's home directory.
+
+Implementation artifacts are `base.img`, `control.img`, and `projects/<project-id>/vm.img`. These are private infrastructure details, not product storage domains. This development storage format intentionally has no conversion from older installations.
 
 ## Host requirements and installation
 
@@ -45,13 +48,13 @@ services.tokendrain = {
 };
 ```
 
-`diskGiB` is the initial size of **each** disk. Images are sparse; logical disk size and allocated host blocks are reported separately. Reflink sharing means allocated-block counts are not exclusive physical usage. Reserve sufficient host free space for actual writes and non-reflink snapshot copies.
+`diskGiB` is the total initial capacity of one project machine, including its operating system. VM storage is sparse; capacity and allocated host blocks are reported separately. Reflink sharing means allocated-block counts are not exclusive physical usage. Reserve sufficient host free space for actual writes.
 
 Run `sudo tokendrain doctor` to inspect host prerequisites and daemon/helper failures. `tokendrain status` and the Settings page inspect application prerequisites from the daemon and query the authenticated helper for KVM, TUN, Firecracker, `ip`, `nft`, cgroups, IPv4 forwarding, and guest artifacts. They report a failed check if the helper cannot be reached. The daemon's private device namespace and limited executable path remain in place; it does not need direct KVM/TUN access or privileged networking tools. A host `nix` executable is not needed to run the installed service; Nix is provided separately inside the guest.
 
 ### Data directory
 
-`services.tokendrain.stateDirectory` defaults to `/var/lib/tokendrain`. To keep the database, encrypted credential store, project disks, snapshots, and application logs on another filesystem:
+`services.tokendrain.stateDirectory` defaults to `/var/lib/tokendrain`. To keep the database, encrypted credential store, project machines and application logs on another filesystem:
 
 ```nix
 services.tokendrain.stateDirectory = "/data/tokendrain";
@@ -63,9 +66,9 @@ Changing the option does not move existing data. Pause schedules, stop execution
 
 ## Privileged boundary
 
-The HTTP daemon runs as `tokendrain`, without Linux capabilities and with `PrivateDevices` enabled. Only `tokendrain-helper` manages TAP/nftables and asks systemd to create transient Firecracker services. The helper listens on `/run/tokendrain/helper.sock`, checks Unix peer credentials, and accepts a versioned fixed set of operations: `start`, `stop`, `list`, and read-only `diagnostics`. Callers supply validated execution/project UUIDs and bounded CPU/RAM settings. They cannot supply an arbitrary shell command, host filename, mount or Firecracker configuration. Diagnostics inspect only the helper's fixed platform prerequisites.
+The HTTP daemon runs as `tokendrain`, without Linux capabilities and with `PrivateDevices` enabled. Only `tokendrain-helper` manages TAP/nftables and asks systemd to create transient Firecracker services. The helper listens on `/run/tokendrain/helper.sock`, checks Unix peer credentials, and accepts a versioned fixed set of operations: `start`, `stop`, `list`, read-only `diagnostics`, and read-only `workspace_export`. Callers supply validated execution/project UUIDs and bounded CPU/RAM settings. They cannot supply an arbitrary shell command, host filename, mount or Firecracker configuration. Diagnostics inspect only the helper's fixed platform prerequisites.
 
-Disk opens traverse directory descriptors with `O_NOFOLLOW` and reject symlinks, non-regular files and hardlinks. The helper passes pinned disk descriptors to systemd bind mounts. A Firecracker process runs as `tokendrain-vm` in a systemd root-directory sandbox. It sees its own images/sockets and read-only Nix store, with no application database, encryption key, home directories or other projects. The guest itself receives only its immutable store image, never a host directory share. Linux capabilities are removed from the VMM; cgroups bound CPU, memory and processes.
+Disk opens traverse directory descriptors with `O_NOFOLLOW` and reject symlinks, non-regular files and hardlinks. The helper passes pinned disk descriptors to systemd bind mounts. A Firecracker process runs as `tokendrain-vm` in a systemd root-directory sandbox. It sees its own images/sockets and read-only Nix store, with no application database, encryption key, home directories or other projects. The guest itself receives only its project root and read-only control block devices, never a host directory share. Linux capabilities are removed from the VMM; cgroups bound CPU, memory and processes.
 
 Each VM reserves its configured RAM plus 512 MiB VMM overhead against the aggregate budget. The default budget is 75% of host physical memory. Platform per-VM limits and concurrency are enforced again by the helper, independently of the HTTP scheduler. Do not grant untrusted users access to the helper socket or the daemon's administrative bearer token.
 
@@ -88,25 +91,23 @@ The module integrates forwarding accepts with the NixOS firewall while its earli
 
 IPv4 forwarding is enabled with `lib.mkDefault 1`, so a VPN or router module can already define `boot.kernel.sysctl."net.ipv4.ip_forward" = 1` without a duplicate-definition error. Forwarding must remain enabled; an explicit disabling value produces a Tokendrain assertion during evaluation.
 
-## Snapshots, restores and locks
+## Storage growth and locks
 
-A pre-run snapshot copies both offline images using `cp --reflink=auto --sparse=always`. Filesystems with reflinks share unchanged blocks; other filesystems get a sparse ordinary copy. A snapshot is published only after both copies and metadata are complete. Insufficient space or a failed copy leaves no partially published snapshot.
-
-Restore supports `workspace`, `environment` or `all`. Replacement files are prepared before a small durable restore journal is committed. If the daemon stops during replacement, the next storage lease rolls the operation forward. Environment reset creates a new ext4 environment image. Disk growth runs an offline filesystem check and `resize2fs`; shrinking is intentionally unsupported.
+**Project → VM storage → Resize** grows the idle project machine. Tokendrain checks the filesystem before increasing capacity and grows the filesystem in place. Shrinking is unsupported. There are no snapshots, selective restores, or resets.
 
 An asyncio lock and advisory process lock serialize project disk operations. The orchestrator holds that lease throughout execution. The helper separately prevents two VMs from attaching the same project. At daemon startup, VM records and transient systemd services are reconciled before interrupted work is admitted; surviving VMs must be stopped before their disks are changed. A process lock alone cannot protect a disk still attached to a surviving VMM.
 
 Normal shutdown stops Codex, clears runtime credentials and cleanly unmounts the guest disks. On Firecracker this uses `systemctl reboot` with `reboot=k`, which exits the VMM; an ordinary x86 poweroff can leave a halted VMM running. This follows the [Firecracker FAQ](https://github.com/firecracker-microvm/firecracker/blob/main/FAQ.md). The helper waits for shutdown and removes the VM service, TAP and runtime directory. If guest shutdown fails, it applies a bounded forced stop; ext4 then recovers its journal on the next boot. Infrastructure failure must not be represented as successful project completion.
 
-Runtime credential files are on tmpfs and therefore are not copied by host disk snapshots. Since the agent has root, arbitrary guest software can deliberately copy credentials into persistent files. Runtime-only injection prevents accidental default persistence, not deliberate retention by untrusted software.
+Managed runtime credential files are on tmpfs and are not written into persistent VM storage. Since the agent has root, arbitrary guest software can deliberately copy credentials into persistent files. Runtime-only injection prevents accidental default persistence, not deliberate retention by untrusted software.
 
 ## Offline workspace access
 
-While a project is idle, its workspace can be listed, previewed, or exported through the privileged helper. The helper mounts only the selected project's workspace disk read-only in a private mount namespace; the web daemon has no mount privileges. Workspace-relative paths are validated without following symlinks, and symlinks and special files are excluded from exports. Access is rejected while a VM has the disk attached.
+While a project is idle, its workspace can be listed, previewed, or exported through the privileged helper. The helper mounts only the selected project's VM filesystem read-only in a private mount namespace; the web daemon has no mount privileges. Workspace-relative paths are validated without following symlinks, and symlinks and special files are excluded from exports. Access is rejected while a VM has the disk attached.
 
 Individual files are downloaded directly; folders and the whole workspace are exported as ZIP. Text/source, sanitized Markdown, and browser-supported images can be previewed. Automatic previews are bounded to 2 MiB, explicit larger previews to 32 MiB; larger files remain download-only. Archives are written through the export path without loading the entire workspace into daemon memory.
 
-Automatic pre-run snapshots retain the full Run ID as metadata; manual snapshots have no Run association. Snapshots copy disks, not VM RAM.
+Workspace exports are restricted to `/workspace`; the remainder of the VM filesystem is never exposed by the Workspace API.
 
 ## Validation and debugging
 
@@ -133,7 +134,7 @@ nix build .#checks.x86_64-linux.module -L
 nix build .#checks.x86_64-linux.firecracker -L
 ```
 
-The Firecracker test requires nested KVM. It exercises the privileged helper/systemd sandbox, real guest boot/control, concurrent project networking, public-egress allowance, host/LAN/interguest denial, fail-closed firewall reloads, disk persistence and cleanup. Its simulated public endpoint is inside the isolated test network, so these checks do not depend on a public website or real credentials.
+The Firecracker test requires nested KVM. It verifies current control A→B on the same project root, persistence of ordinary machine files and a Nix-installed tool, temporary credentials, storage growth, idle Workspace browsing, and active Workspace exclusion. It also exercises the privileged helper/systemd sandbox, real guest boot/control, concurrent project networking, public-egress allowance, host/LAN/interguest denial, fail-closed firewall reloads, disk persistence and cleanup. Its simulated public endpoint is inside the isolated test network, so these checks do not depend on a public website or real credentials.
 
 On an installed host:
 
@@ -149,4 +150,4 @@ Run `sudo tokendrain doctor` for host diagnostics and `sudo tokendrain login-tok
 
 The backend records execution/project IDs in helper logs. Firecracker console output appears in the corresponding transient service's journal. Console output is untrusted guest output and may contain values printed by software inside the VM; restrict access and retention accordingly.
 
-The current implementation follows the official [Firecracker configuration API](https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/swagger/firecracker.yaml), [vsock protocol](https://github.com/firecracker-microvm/firecracker/blob/main/docs/vsock.md), and [microvm.nix Firecracker runner](https://github.com/microvm-nix/microvm.nix/blob/main/lib/runners/firecracker.nix). Dependency revisions are recorded in `flake.lock`.
+The current implementation follows the official [Firecracker configuration API](https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/swagger/firecracker.yaml) and [vsock protocol](https://github.com/firecracker-microvm/firecracker/blob/main/docs/vsock.md). Nix builds the base filesystem and boot artifacts; the helper launches Firecracker directly. Dependency revisions are recorded in `flake.lock`.

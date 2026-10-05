@@ -14,15 +14,10 @@ Authentication: `POST /session {token}` establishes a same-origin HttpOnly cooki
 - `PATCH /projects/{id}` accepts `name,description,next_run_feedback,default_model,default_reasoning_effort`
 - `DELETE /projects/{id}` rejects active projects
 - `GET /projects/{id}/executions` → `Execution[]`
-- `GET /projects/{id}/storage` → `{environment:{size_bytes,used_bytes,path?},workspace:{size_bytes,used_bytes,path?}}`
-- `GET /projects/{id}/snapshots` → `Snapshot[]`
-- `POST /projects/{id}/snapshots {name}`
-- `POST /projects/{id}/snapshots/{snapshot_id}/restore {scope:"workspace"|"environment"|"all"}`
-- `DELETE /projects/{id}/snapshots/{snapshot_id}`
-- `POST /projects/{id}/environment/reset {}`
-- `POST /projects/{id}/storage/resize {scope:"workspace"|"environment",size_gib:number}`
+- `GET /projects/{id}/storage` → `{virtual_size_bytes,allocated_bytes}`
+- `POST /projects/{id}/storage/resize {size_gib:number}` grows total VM storage while idle.
 
-Project: `{id,name,description,next_run_feedback,status,default_model,default_reasoning_effort,created_at,updated_at,last_run_at?,latest_report?:Report,environment_metadata?,workspace_metadata?}`. Empty model means provider default. Snapshot: `{id,name,run_id:null|string,created_at,environment_bytes?,workspace_bytes?}`.
+Project: `{id,name,description,next_run_feedback,status,default_model,default_reasoning_effort,created_at,updated_at,last_run_at?,latest_report?:Report,storage_metadata?}`. Empty model means provider default. Each project owns one persistent development machine; Workspace exposes only its `/workspace` directory.
 
 ## Runs, limits, models
 

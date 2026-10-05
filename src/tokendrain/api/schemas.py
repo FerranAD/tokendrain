@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import Field, SecretStr
 
@@ -14,16 +14,7 @@ class LoginInput(Boundary):
     token: SecretStr
 
 
-class SnapshotInput(Boundary):
-    name: str = Field(default="Manual snapshot", min_length=1, max_length=200)
-
-
-class RestoreInput(Boundary):
-    scope: Literal["workspace", "environment", "all"]
-
-
 class ResizeInput(Boundary):
-    scope: Literal["workspace", "environment"]
     size_gib: int = Field(ge=1, le=4096)
 
 

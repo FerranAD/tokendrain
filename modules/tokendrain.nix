@@ -42,7 +42,7 @@ in
     stateDirectory = mkOption {
       type = types.str;
       default = "/var/lib/tokendrain";
-      description = "Absolute directory for the database, encrypted credentials, project disks, snapshots, and logs. Existing data is not moved automatically.";
+      description = "Absolute directory for the database, encrypted credentials, project machines, and logs. Existing data is not moved automatically.";
     };
     masterKeyFile = mkOption {
       type = types.nullOr types.str;
@@ -102,7 +102,7 @@ in
       };
       guestArtifacts = mkOption {
         type = types.package;
-        description = "Nix-built kernel/initrd/store guest artifact bundle.";
+        description = "Nix-built kernel/initrd, base project machine, and current control bundle.";
       };
       maxMemoryMiB = mkOption {
         type = types.ints.between 512 131072;
@@ -129,6 +129,7 @@ in
         diskGiB = mkOption {
           type = types.ints.between 1 4096;
           default = 40;
+          description = "Total persistent storage capacity of each new project VM in GiB.";
         };
       };
       networking.allowLan = mkOption {

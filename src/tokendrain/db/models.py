@@ -27,8 +27,7 @@ class Project(Base):
     status: Mapped[str] = mapped_column(String(24), default="idle")
     default_model: Mapped[str] = mapped_column(String(200), default="")
     default_reasoning_effort: Mapped[str] = mapped_column(String(24), default="medium")
-    environment_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    workspace_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    storage_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     thread_id: Mapped[str | None] = mapped_column(String(200))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -137,19 +136,6 @@ class ProjectTask(Base):
     origin: Mapped[str] = mapped_column(String(16), default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
-
-
-class ProjectSnapshot(Base):
-    __tablename__ = "project_snapshots"
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    project_id: Mapped[str] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), index=True
-    )
-    name: Mapped[str] = mapped_column(String(200))
-    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    environment_bytes: Mapped[int] = mapped_column(Integer, default=0)
-    workspace_bytes: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class SecretEntry(Base):

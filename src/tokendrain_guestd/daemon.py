@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from tokendrain import __version__
 from tokendrain.auth.openai import RuntimeCredentials
 from tokendrain.codex.client import CodexClient
 from tokendrain.codex.rpc import JsonObject, JsonRpcPeer, RpcError
@@ -312,6 +313,9 @@ class GuestDaemon:
                 "turn_id": self._active_turn,
                 "workspace": str(self.workspace),
                 "codex_home": str(self.codex_home),
+                "guestd": os.environ.get("TOKENDRAIN_CONTROL_GUESTD"),
+                "control_version": __version__,
+                "codex_executable": self.executable,
                 "dropped_output_events": self.codex.dropped_output_events if self.codex else 0,
             }
         if method == "credentials_set":
@@ -492,7 +496,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="tokendrain-guestd")
     parser.add_argument("--port", type=int, default=GUEST_PORT)
     parser.add_argument("--runtime-dir", default="/run/tokendrain")
-    parser.add_argument("--codex-home", default="/persist/codex")
+    parser.add_argument("--codex-home", default="/root/.local/share/tokendrain/codex")
     parser.add_argument("--workspace", default="/workspace")
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--poweroff-on-shutdown", action="store_true")

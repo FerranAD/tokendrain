@@ -33,7 +33,7 @@ def execution_failure(error: Exception, *, stage: str, memory_mib: int) -> dict[
         "explanation": explanation,
         "recovery": action,
         "workspace": (
-            "Tokendrain keeps the project workspace and environment disks. Files already written "
+            "Tokendrain keeps the persistent project machine. Files already written "
             "remain there; interrupted commands may need to be run again. No reset is required."
         ),
     }

@@ -381,7 +381,6 @@ class Supervisor:
                         raise asyncio.CancelledError
                     if reason := stop_reason(policy, [], elapsed()):
                         raise BudgetReached(reason)
-                    await self.projects.snapshot(project_id, f"Before run {run_id[:8]}", run_id)
                     if cancel.is_set():
                         raise asyncio.CancelledError
                     for secret in secrets_rows:
@@ -761,7 +760,7 @@ class Supervisor:
             "kanban": tasks or [],
             "feedback": project.next_run_feedback,
             "workspace": "/workspace",
-            "persistent_environment": "/persist",
+            "project_machine": "persistent Linux root filesystem",
             "previous_run": previous_report,
             "secrets": [{"name": secret.name, "purpose": secret.description} for secret in secrets],
         }
@@ -772,7 +771,7 @@ class Supervisor:
             }
         return (
             "You are the autonomous worker for a persistent software project. You have root "
-            "inside an isolated disposable VM. Inspect the workspace and installed environment "
+            "inside an isolated persistent project VM. Inspect the workspace and installed tools "
             "before acting. Make substantial useful progress, run appropriate checks, and continue "
             "without human approvals. Install development tools as needed; "
             "home and Nix state persist. "

@@ -2,8 +2,9 @@
   pkgs,
   tokendrainModule,
   guestArtifacts,
+  guestArtifactsB,
 }:
-pkgs.testers.runNixOSTest {
+(pkgs.testers.runNixOSTest {
   name = "tokendrain-firecracker";
   nodes = {
     machine = { lib, ... }: {
@@ -14,13 +15,13 @@ pkgs.testers.runNixOSTest {
         auth.mode = "none";
         microvm.guestArtifacts = guestArtifacts;
         microvm.defaults.memoryMiB = 1536;
-        microvm.defaults.diskGiB = 1;
+        microvm.defaults.diskGiB = 12;
       };
       # Exercise helper independently of OpenAI credentials and the API daemon.
       systemd.services.tokendraind.enable = lib.mkForce false;
       virtualisation = {
         memorySize = 8192;
-        diskSize = 8192;
+        diskSize = 24576;
         cores = 4;
         qemu.options = [ "-cpu host" ];
       };
@@ -79,9 +80,12 @@ pkgs.testers.runNixOSTest {
     machine.succeed("curl --fail --connect-timeout 2 http://93.184.215.2:8080/")
     machine.wait_until_succeeds("curl --fail --connect-timeout 2 http://8.8.8.8:8080/", timeout=20)
     try:
-        machine.succeed("${pkgs.python312}/bin/python ${./helper-smoke.py}", timeout=240)
+        machine.succeed("TOKENDRAIN_TEST_GUEST_ARTIFACTS=${guestArtifacts} TOKENDRAIN_TEST_UPGRADE_ARTIFACTS=${guestArtifactsB} ${pkgs.python312}/bin/python ${./helper-smoke.py}", timeout=360)
     except Exception:
         machine.log(machine.succeed("journalctl -u 'tokendrain*' --no-pager -n 400"))
         raise
   '';
+})
+// {
+  upgradeArtifacts = guestArtifactsB;
 }

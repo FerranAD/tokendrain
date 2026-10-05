@@ -42,11 +42,11 @@ read-only, hence XDG_CACHE_HOME in /tmp. Nix network/build access works.
   transition table, ANY budget predicates, provider/completion natural stops.
 - `config.py`: env Settings prefix TOKENDRAIN_, used by Nix module.
 - `db/models.py`: relational Project/Run/ProjectExecution/Report/UsageSnapshot/
-  Schedule/Event/ProjectSnapshot/SecretEntry/GitHubApp/Installation/ProjectGitHub/Setting.
+  Schedule/Event/SecretEntry/GitHubApp/Installation/ProjectGitHub/Setting.
 - Initial static Alembic migration generated and checked in from model metadata;
   production `migrate(path)` runs Alembic via asyncio.to_thread; no create_all.
 - `services.py`: ProjectService + RunService, CRUD primitives, DB reservation
-  via partial unique index for all active/queued project executions, snapshots,
+  via partial unique index for all active/queued project executions,
   state transitions, usage observations. Methods list_projects/list_runs.
 - `events.py`: persisted SSE replay using Event IDs, condition wakeups/heartbeats.
 - `scheduler/service.py`: timezone-aware cron, due triggers create ordinary Runs
@@ -58,7 +58,7 @@ read-only, hence XDG_CACHE_HOME in /tmp. Nix network/build access works.
   structured reports, credential renewal interrupts at safe acknowledgement then
   restart/resume; no blind replay, redacts completed log units, usage notifications.
 - `orchestration/supervisor.py`: owned TaskGroup dispatcher, concurrency and per-run
-  parallel mode, startup orphan stop/fail recovery, snapshot/lease/start/turn/stop,
+  parallel mode, startup orphan stop/fail recovery, lease/start/turn/stop,
   persistence, cancellation, report task-log updates preserve concurrent user edits.
 
 ## Critical incomplete work
@@ -107,7 +107,7 @@ read-only, hence XDG_CACHE_HOME in /tmp. Nix network/build access works.
 
 At graceful checkpoint: all 24 existing tests pass, full Ruff passes, strict mypy
 43 source files passes, compileall passes. Infrastructure agent separately evaluated
-microvm.nix guest-artifacts derivation. No live OAuth/GitHub credentials used, no
+the Nix guest-artifacts derivation. No live OAuth/GitHub credentials used, no
 real VM boots yet. Component log files contain exact contracts and caveats.
 
 ## Collaboration ownership

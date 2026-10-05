@@ -40,16 +40,16 @@ Project
 │   ├── In progress
 │   └── Done
 ├── Workspace        source files and results
-└── Environment      installed tools, home, caches
+└── VM storage       persistent development machine
 
 Run
-└── Fresh VM per selected project
+└── Start each selected project’s persistent VM
     └── Codex works approved tasks
 ```
 
 Codex resumes **In progress** first, then takes **Todo**. It can add discoveries to Backlog, but only you can promote them into approved work. The host enforces that rule. No approved tasks left? Stop. There is no prize for inventing busywork.
 
-The VM is thrown away after execution; the project's disks stay. Leave feedback for the next Run when you want to change direction. Execution outcomes and the last valid agent checkpoint are kept separately, so cancelling work doesn't rewrite what the agent last reported.
+The project machine persists between Runs; Tokendrain supplies current control software at every boot. Leave feedback for the next Run when you want to change direction. Execution outcomes and the last valid agent checkpoint are kept separately, so cancelling work doesn't rewrite what the agent last reported.
 
 ## Usage limits
 
@@ -200,7 +200,7 @@ tokendraind
 └── Privileged helper
     └── Firecracker VM per active project execution
         ├── /workspace   persistent files
-        ├── /persist     persistent development environment
+        ├── /           persistent development machine
         └── Codex app-server
 ```
 

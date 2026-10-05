@@ -27,10 +27,8 @@ from tokendrain.api.schemas import (
     PlatformInput,
     ProjectCreateInput,
     ResizeInput,
-    RestoreInput,
     SecretImport,
     SecretInput,
-    SnapshotInput,
 )
 from tokendrain.application import Application
 from tokendrain.auth.probe import requires_reauthentication
@@ -42,7 +40,6 @@ from tokendrain.db.models import (
     Project,
     ProjectExecution,
     ProjectGitHub,
-    ProjectSnapshot,
     Schedule,
     SecretEntry,
     Setting,
@@ -347,97 +344,9 @@ async def storage_info(request: Request, project_id: str) -> Any:
     await services.projects.get(project_id)
     info = await services.storage.usage(project_id)
     return {
-        "environment": {
-            "size_bytes": info.environment_bytes,
-            "used_bytes": info.environment_allocated_bytes,
-        },
-        "workspace": {
-            "size_bytes": info.workspace_bytes,
-            "used_bytes": info.workspace_allocated_bytes,
-        },
+        "virtual_size_bytes": info.virtual_size_bytes,
+        "allocated_bytes": info.allocated_bytes,
     }
-
-
-@router.get(API + "/projects/{project_id}/snapshots")
-async def snapshots(request: Request, project_id: str) -> Any:
-    services = current(request)
-    await services.projects.get(project_id)
-    async with services.sessions() as db:
-        rows = (
-            await db.scalars(
-                select(ProjectSnapshot).where(ProjectSnapshot.project_id == project_id)
-            )
-        ).all()
-        names = {row.id: row.name for row in rows}
-    values = await services.storage.list_snapshots(project_id)
-    return [
-        {**value.model_dump(mode="json"), "name": names.get(value.id, "Recovered snapshot")}
-        for value in values
-    ]
-
-
-@router.post(API + "/projects/{project_id}/snapshots", status_code=201)
-async def snapshot(request: Request, project_id: str, body: SnapshotInput) -> Any:
-    services = current(request)
-    ready(services)
-    await services.projects.require_idle(project_id)
-    async with services.storage.lease(project_id):
-        await services.projects.require_idle(project_id)
-        value = await services.projects.snapshot(project_id, body.name)
-    await services.events.publish("project.snapshot", project_id=project_id)
-    return encoded(value)
-
-
-@router.post(API + "/projects/{project_id}/snapshots/{snapshot_id}/restore")
-async def restore(request: Request, project_id: str, snapshot_id: str, body: RestoreInput) -> Any:
-    services = current(request)
-    ready(services)
-    await services.projects.require_idle(project_id)
-    async with services.storage.lease(project_id):
-        await services.projects.require_idle(project_id)
-        await services.storage.restore(project_id, snapshot_id, body.scope)
-        async with services.sessions.begin() as db:
-            row = await db.get(Project, project_id)
-            assert row
-            # Restored files can contradict saved conversations; start a new inspected thread.
-            row.thread_id = None
-    await services.events.publish("project.restored", project_id=project_id)
-    return await storage_info(request, project_id)
-
-
-@router.delete(API + "/projects/{project_id}/snapshots/{snapshot_id}", status_code=204)
-async def delete_snapshot(request: Request, project_id: str, snapshot_id: str) -> Response:
-    services = current(request)
-    ready(services)
-    await services.projects.require_idle(project_id)
-    async with services.storage.lease(project_id):
-        await services.projects.require_idle(project_id)
-        await services.storage.delete_snapshot(project_id, snapshot_id)
-        async with services.sessions.begin() as db:
-            await db.execute(
-                delete(ProjectSnapshot).where(
-                    ProjectSnapshot.id == snapshot_id, ProjectSnapshot.project_id == project_id
-                )
-            )
-    await services.events.publish("project.snapshot_deleted", project_id=project_id)
-    return Response(status_code=204)
-
-
-@router.post(API + "/projects/{project_id}/environment/reset")
-async def reset_environment(request: Request, project_id: str) -> Any:
-    services = current(request)
-    ready(services)
-    await services.projects.require_idle(project_id)
-    async with services.storage.lease(project_id):
-        await services.projects.require_idle(project_id)
-        await services.projects.snapshot(project_id, "Before environment reset")
-        await services.storage.reset_environment(project_id)
-        async with services.sessions.begin() as db:
-            row = await db.get(Project, project_id)
-            assert row
-            row.thread_id = None
-    await services.events.publish("project.environment_reset", project_id=project_id)
-    return await storage_info(request, project_id)
 
 
 @router.post(API + "/projects/{project_id}/storage/resize")
@@ -447,7 +356,7 @@ async def resize(request: Request, project_id: str, body: ResizeInput) -> Any:
     await services.projects.require_idle(project_id)
     async with services.storage.lease(project_id):
         await services.projects.require_idle(project_id)
-        await services.storage.resize(project_id, body.scope, body.size_gib)
+        await services.storage.resize(project_id, body.size_gib)
     await services.events.publish("project.storage_resized", project_id=project_id)
     return await storage_info(request, project_id)
 

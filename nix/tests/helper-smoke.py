@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
+import re
+import shlex
 import socket
 import struct
 import subprocess
@@ -11,6 +15,24 @@ import zipfile
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+
+def synthetic_access_token() -> str:
+    # Synthetic claims only; no provider/account access is performed by command/exec.
+    claims = {
+        "sub": "test-user",
+        "email": "test@example.invalid",
+        "exp": time.time() + 3600,
+        "https://api.openai.com/auth": {
+            "chatgpt_account_id": "test-account",
+            "chatgpt_plan_type": "plus",
+        },
+    }
+
+    def encode(value: dict[str, Any]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    return encode({"alg": "RS256"}) + "." + encode(claims) + ".dGVzdA"
 
 
 def helper(operation: str, payload: dict[str, Any]) -> Any:
@@ -82,8 +104,10 @@ class Guest:
             {
                 "openai": {
                     "mode": "chatgpt",
-                    "access_token": "test-token-no-real-provider",
+                    "access_token": synthetic_access_token(),
                     "expires_at": time.time() + 3600,
+                    "account_id": "test-account",
+                    "plan_type": "plus",
                 }
             },
         )
@@ -113,11 +137,14 @@ def project() -> str:
     value = str(uuid4())
     path = Path("/var/lib/tokendrain/projects") / value
     path.mkdir(parents=True)
-    for domain in ("environment", "workspace"):
-        image = path / f"{domain}.img"
-        with image.open("wb") as stream:
-            stream.truncate(1024**3)
-        subprocess.run(["mkfs.ext4", "-q", "-F", str(image)], check=True)
+    # The helper's trusted artifact location is supplied by the test, never by clients.
+    artifacts = Path(os.environ["TOKENDRAIN_TEST_GUEST_ARTIFACTS"])
+    image = path / "vm.img"
+    subprocess.run(
+        ["cp", "--reflink=auto", "--sparse=always", str(artifacts / "base.img"), str(image)],
+        check=True,
+    )
+    image.chmod(0o600)
     return value
 
 
@@ -141,6 +168,27 @@ def wait_lan_policy(prefix: str, present: bool) -> None:
         time.sleep(0.1)
 
 
+def use_control_artifacts(artifacts: Path) -> None:
+    """Simulate a host upgrade with root-owned helper configuration, never client paths."""
+    unit = Path("/etc/systemd/system/tokendrain-helper.service").read_text()
+    match = re.search(r"^ExecStart=(.*)$", unit, re.M)
+    assert match
+    command = shlex.split(match[1])
+    config_index = command.index("--config") + 1
+    config = json.loads(Path(command[config_index]).read_text())
+    config["guest_artifacts"] = str(artifacts)
+    config_path = Path("/run/test-helper.json")
+    config_path.write_text(json.dumps(config))
+    command[config_index] = str(config_path)
+    dropin = Path("/run/systemd/system/tokendrain-helper.service.d")
+    dropin.mkdir(parents=True, exist_ok=True)
+    (dropin / "test.conf").write_text(
+        "[Service]\nExecStart=\nExecStart=" + shlex.join(command) + "\n"
+    )
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "restart", "tokendrain-helper"], check=True)
+
+
 def main() -> None:
     diagnostics = {check["name"]: check for check in helper("diagnostics", {})}
     for name in (
@@ -160,7 +208,30 @@ def main() -> None:
     try:
         first, guest = boot(first_project)
         handles.append(first)
-        guest.command("printf workspace > /workspace/sentinel; printf environment > /root/sentinel")
+        first_control = guest.rpc("guest_info")
+        assert first_control["control_version"] == "0.1.0", first_control
+        guest.command(
+            "set -e; printf workspace > /workspace/sentinel; "
+            "mkdir -p /root/.config /opt; printf home > /root/.config/sentinel; "
+            "printf opt > /opt/sentinel; printf config > /etc/td-sentinel; "
+            "mkdir -p /root/test-tool/bin; "
+            "printf '#!/bin/sh\\nprintf persistent-tool\\n' "
+            "> /root/test-tool/bin/td-test-tool; "
+            "chmod +x /root/test-tool/bin/td-test-tool; "
+            'nix-env -i "$(nix-store --add /root/test-tool)"; '
+            "mkdir -p /usr/local/bin; printf ephemeral > /run/tokendrain/ephemeral; "
+            "test -s /run/tokendrain/secrets.json; "
+            "findmnt -n -o FSTYPE /run | grep tmpfs"
+        )
+        for operation in ("tree", "file", "archive"):
+            payload = {"project_id": first_project, "operation": operation}
+            if operation == "file":
+                payload["path"] = "sentinel"
+            try:
+                helper("workspace_export", payload)
+                raise AssertionError("Active VM workspace was exported")
+            except AssertionError as error:
+                assert "Stop the project" in str(error), error
         guest.command("curl --fail --connect-timeout 5 http://8.8.8.8:8080/ >/dev/null")
         # The existing /32 route remains usable, but its new connected LAN must
         # be denied immediately after route-policy reconciliation.
@@ -217,9 +288,33 @@ def main() -> None:
             else:
                 assert export_path.read_bytes() == b"workspace"
             export_path.unlink()
+        # Grow the same root filesystem offline, then boot it under current control B.
+        image = Path("/var/lib/tokendrain/projects") / first_project / "vm.img"
+        checked = subprocess.run(["e2fsck", "-pf", str(image)])
+        assert checked.returncode in (0, 1)
+        with image.open("r+b") as stream:
+            stream.truncate(image.stat().st_size + 1024**3)
+        subprocess.run(["resize2fs", str(image)], check=True)
+        use_control_artifacts(Path(os.environ["TOKENDRAIN_TEST_UPGRADE_ARTIFACTS"]))
         final, guest = boot(first_project)
         handles.append(final)
-        assert guest.command("cat /workspace/sentinel /root/sentinel") == "workspaceenvironment"
+        updated_control = guest.rpc("guest_info")
+        assert updated_control["control_version"] == "control-test-B", updated_control
+        assert updated_control["guestd"] != first_control["guestd"]
+        assert updated_control["codex_executable"].startswith("/nix/store/")
+        assert (
+            guest.command(
+                "set -e; cat /workspace/sentinel /root/.config/sentinel "
+                "/opt/sentinel /etc/td-sentinel; "
+                "td-test-tool; test ! -e /run/tokendrain/ephemeral"
+            )
+            == "workspacehomeoptconfigpersistent-tool"
+        )
+        guest.command("nix-store --check-validity " + first_control["guestd"])
+        # A persistent project-installed Codex must not replace the managed binary.
+        guest.command(
+            "printf '#!/bin/sh\\nexit 99\\n' > /usr/local/bin/codex; chmod +x /usr/local/bin/codex"
+        )
         # Removing the firewall must stop its dependent VMM before policy goes
         # away; restarting the helper then reconciles the dead runtime record.
         subprocess.run(["systemctl", "stop", "nftables"], check=True, timeout=60)

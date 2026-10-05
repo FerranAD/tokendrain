@@ -2,10 +2,10 @@ import { Icon } from './icons';
 import { WorkspacePanel } from './workspace';
 import { Kanban } from './kanban';
 import { ModelSelector } from './model-selector';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { mutate, useAction, useResource } from './api';
-import type { Execution, Project, ProjectGitHub, Secret, Snapshot, StorageInfo } from './types';
+import type { Execution, Project, ProjectGitHub, Secret, StorageInfo } from './types';
 import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
 import {
   ActionNotice,
@@ -264,7 +264,7 @@ const tabs = [
   'History',
   'Description',
   'Feedback',
-  'Environment',
+  'VM storage',
   'GitHub',
   'Secrets',
 ] as const;
@@ -379,8 +379,8 @@ export function ProjectPage({ id }: { id: string }) {
           <section className="panel danger-zone">
             <h3>Delete project</h3>
             <p className="muted small">
-              Permanently remove this project, its disks, secrets, and snapshots. Active projects
-              cannot be deleted.
+              Permanently remove this project, its machine and secrets. Active projects cannot be
+              deleted.
             </p>
             <button
               className="danger"
@@ -418,7 +418,7 @@ export function ProjectPage({ id }: { id: string }) {
           {history.data ? <ExecutionTable executions={history.data} /> : <Loading />}
         </section>
       )}
-      {tab === 'Environment' && <EnvironmentPanel id={id} />}
+      {tab === 'VM storage' && <StoragePanel id={id} />}
       {tab === 'GitHub' && <ProjectGitHubPanel id={id} />}
       {tab === 'Secrets' && <SecretsPanel id={id} />}
     </>
@@ -552,201 +552,56 @@ export function ExecutionTable({ executions }: { executions: Execution[] }) {
   );
 }
 
-function EnvironmentPanel({ id }: { id: string }) {
+function StoragePanel({ id }: { id: string }) {
   const storage = useResource<StorageInfo>(`/projects/${id}/storage`);
-  const snapshots = useResource<Snapshot[]>(`/projects/${id}/snapshots`);
-  const [name, setName] = useState('');
-  const [scope, setScope] = useState('workspace');
-  const [size, setSize] = useState(40);
-  const snapshotDraft = useUnsavedChanges(name);
+  const currentSize = storage.data
+    ? Math.ceil(storage.data.virtual_size_bytes / 1024 ** 3)
+    : undefined;
+  const [size, setSize] = useState<number | ''>('');
+  useEffect(() => {
+    setSize(currentSize ?? '');
+  }, [id, currentSize]);
   const action = useAction();
   return (
-    <>
-      <section className="panel">
-        <h2>Persistent storage</h2>
-        <p className="muted">
-          Each run boots a fresh VM with these disks attached. The environment keeps installed tools
-          and caches; the workspace keeps your source code and data.
-        </p>
-        <ErrorNotice error={storage.error} />
-        {storage.data && (
-          <div className="storage-grid">
-            {(['environment', 'workspace'] as const).map((domain) => (
-              <article className="storage-card" key={domain}>
-                <h3>{domain}</h3>
-                <strong>{bytes(storage.data![domain].used_bytes)}</strong>
-                <p className="muted small">
-                  allocated on host · {bytes(storage.data![domain].size_bytes)} virtual capacity
-                </p>
-              </article>
-            ))}
-          </div>
-        )}
-        <div className="form-grid">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void action.run(
-                () => mutate(`/projects/${id}/storage/resize`, 'POST', { scope, size_gib: size }),
-                'Storage resized.',
-              );
-            }}
-          >
-            <h3>Grow a disk</h3>
-            <div className="row">
-              <label>
-                Disk
-                <select value={scope} onChange={(e) => setScope(e.target.value)}>
-                  <option value="workspace">Workspace</option>
-                  <option value="environment">Environment</option>
-                </select>
-              </label>
-              <label>
-                New size, GiB
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={16384}
-                  value={size}
-                  onChange={(e) => setSize(Number(e.target.value))}
-                />
-              </label>
-            </div>
-            <button disabled={action.busy}>Resize disk</button>
-          </form>
-          <div>
-            <h3>Rebuild the environment</h3>
-            <p className="muted small">
-              Start with fresh tools and caches while retaining all workspace files. Stop the
-              project first.
-            </p>
-            <button
-              className="danger"
-              disabled={action.busy}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    'Reset this environment? Installed tools, home files, and caches will be removed. Workspace files remain.',
-                  )
-                )
-                  void action.run(
-                    () => mutate(`/projects/${id}/environment/reset`, 'POST', {}),
-                    'Environment reset.',
-                  );
-              }}
-            >
-              Reset environment…
-            </button>
-          </div>
-        </div>
-        <ActionNotice {...action} />
-      </section>
-      <section className="panel">
-        <h2>Storage snapshots</h2>
-        <p className="muted">
-          Snapshots contain persistent disks, including anything the agent wrote to them. Runtime
-          credential files are kept separately.
-        </p>
-        <form
-          className="inline-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void action.run(async () => {
-              await mutate(`/projects/${id}/snapshots`, 'POST', { name });
-              setName('');
-              snapshotDraft.markSaved('');
-            }, 'Snapshot created.');
-          }}
-        >
-          <label className="grow">
-            <span className="sr-only">Snapshot name</span>
-            <input
-              value={name}
-              maxLength={200}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Snapshot name (optional)"
-            />
-          </label>
-          <button disabled={action.busy}>Create snapshot</button>
-        </form>
-        <UnsavedNotice dirty={snapshotDraft.dirty} />
-        <ErrorNotice error={snapshots.error} />
-        {snapshots.data?.length ? (
-          <div className="snapshot-list">
-            {snapshots.data.map((snapshot) => (
-              <SnapshotRow key={snapshot.id} projectId={id} snapshot={snapshot} />
-            ))}
-          </div>
-        ) : (
-          <p className="muted small">
-            No snapshots yet. Runs also create a preparation snapshot when possible.
-          </p>
-        )}
-      </section>
-    </>
-  );
-}
-
-function SnapshotRow({ projectId, snapshot }: { projectId: string; snapshot: Snapshot }) {
-  const [scope, setScope] = useState('workspace');
-  const action = useAction();
-  const path = `/projects/${projectId}/snapshots/${snapshot.id}`;
-  return (
-    <div className="snapshot-row">
-      <div className="row between wrap">
-        <div>
-          <strong>
-            {snapshot.run_id ? (
-              <>
-                Before run <Link href={`/runs/${snapshot.run_id}`}>{shortId(snapshot.run_id)}</Link>
-              </>
-            ) : (
-              snapshot.name || shortId(snapshot.id)
-            )}
-          </strong>
-          <p className="tiny muted">{date(snapshot.created_at)}</p>
-        </div>
-        <div className="row wrap">
-          <select
-            aria-label="What to restore"
-            value={scope}
-            onChange={(e) => setScope(e.target.value)}
-          >
-            <option value="workspace">Workspace only</option>
-            <option value="environment">Environment only</option>
-            <option value="all">Both disks</option>
-          </select>
-          <button
-            disabled={action.busy}
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Replace ${scope === 'all' ? 'both disks' : `the ${scope}`} with this snapshot? Changes since the snapshot will be lost.`,
-                )
-              )
-                void action.run(
-                  () => mutate(`${path}/restore`, 'POST', { scope }),
-                  'Snapshot restored.',
-                );
-            }}
-          >
-            Restore…
-          </button>
-          <button
-            className="quiet danger"
-            disabled={action.busy}
-            onClick={() => {
-              if (window.confirm('Delete this snapshot?'))
-                void action.run(() => mutate(path, 'DELETE'));
-            }}
-          >
-            Delete
-          </button>
-        </div>
-      </div>
+    <section className="panel">
+      <h2>VM storage</h2>
+      <p className="muted">
+        This project's development machine persists between runs, including installed tools,
+        configuration, caches, and Workspace files. Stop the project before resizing storage.
+      </p>
+      <ErrorNotice error={storage.error} />
+      {storage.data && (
+        <article className="storage-card">
+          <strong>{bytes(storage.data.virtual_size_bytes)}</strong>
+          <p className="muted small">{bytes(storage.data.allocated_bytes)} allocated</p>
+        </article>
+      )}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void action.run(
+            () => mutate(`/projects/${id}/storage/resize`, 'POST', { size_gib: size }),
+            'VM storage resized.',
+          );
+        }}
+      >
+        <h3>Resize VM storage</h3>
+        <p className="muted small">Storage can grow; shrinking is unsupported.</p>
+        <label>
+          New capacity, GiB
+          <input
+            type="number"
+            required
+            min={currentSize ?? 1}
+            max={4096}
+            value={size}
+            onChange={(e) => setSize(Number(e.target.value))}
+          />
+        </label>
+        <button disabled={action.busy || currentSize === undefined}>Resize</button>
+      </form>
       <ActionNotice {...action} />
-    </div>
+    </section>
   );
 }
 

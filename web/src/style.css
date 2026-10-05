@@ -1084,27 +1084,7 @@ input[type='checkbox'] {
 .storage-card > p {
   margin-top: 7px;
 }
-.snapshot-list {
-  margin-top: 20px;
-}
-.snapshot-row {
-  border-top: 1px solid var(--line);
-  padding: 16px 0;
-}
-.snapshot-row strong {
-  font-size: 12px;
-}
-.snapshot-row .row p {
-  margin-top: 5px;
-}
-.snapshot-row select {
-  width: auto;
-  min-width: 140px;
-  font-size: 11px;
-}
-.snapshot-row button {
-  font-size: 11px;
-}
+
 .secret-row {
   padding: 15px 0;
   border-top: 1px solid var(--line);
@@ -1555,9 +1535,7 @@ td:last-child {
   .form-grid {
     gap: 15px;
   }
-  .snapshot-row > .row {
-    align-items: flex-start;
-  }
+
   .event-log {
     padding: 10px;
   }
@@ -1651,12 +1629,7 @@ td:last-child {
     align-items: flex-start;
     flex-wrap: wrap;
   }
-  .snapshot-row select {
-    width: 100%;
-  }
-  .snapshot-row .row {
-    gap: 8px;
-  }
+
   .section-heading {
     gap: 10px;
   }
@@ -2338,7 +2311,6 @@ input[type='radio'] {
 [data-theme='dark'] .facts > div,
 [data-theme='dark'] .condition-row,
 [data-theme='dark'] .check,
-[data-theme='dark'] .snapshot-row,
 [data-theme='dark'] .secret-row,
 [data-theme='dark'] .schedule-preview {
   border-color: var(--line);

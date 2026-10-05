@@ -7,17 +7,14 @@ import os
 import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Literal, Protocol
-from uuid import UUID, uuid4
+from typing import Protocol
+from uuid import UUID
 
 from pydantic import BaseModel
 
 from tokendrain.vm.commands import CommandRunner, Runner
-
-Domain = Literal["environment", "workspace", "all"]
 
 
 async def durable_io[T, **P](function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
@@ -48,34 +45,16 @@ def identifier(value: str) -> str:
 
 class StorageInfo(BaseModel):
     project_id: str
-    environment: Path
-    workspace: Path
-    environment_bytes: int
-    workspace_bytes: int
-    environment_allocated_bytes: int = 0
-    workspace_allocated_bytes: int = 0
-
-
-class SnapshotInfo(BaseModel):
-    id: str
-    project_id: str
-    created_at: datetime
-    environment_bytes: int
-    workspace_bytes: int
+    vm_path: Path
+    virtual_size_bytes: int
+    allocated_bytes: int = 0
 
 
 class ProjectStorage(Protocol):
     async def create(self, project_id: str) -> StorageInfo: ...
-    async def snapshot(self, project_id: str) -> SnapshotInfo: ...
-    async def restore(self, project_id: str, snapshot_id: str, domain: Domain = "all") -> None: ...
     async def usage(self, project_id: str) -> StorageInfo: ...
     def lease(self, project_id: str) -> AbstractAsyncContextManager[None]: ...
-    async def list_snapshots(self, project_id: str) -> list[SnapshotInfo]: ...
-    async def delete_snapshot(self, project_id: str, snapshot_id: str) -> None: ...
-    async def reset_environment(self, project_id: str) -> None: ...
-    async def resize(
-        self, project_id: str, domain: Literal["environment", "workspace"], gib: int
-    ) -> None: ...
+    async def resize(self, project_id: str, gib: int) -> None: ...
     async def delete_project(self, project_id: str) -> None: ...
 
 
@@ -94,7 +73,14 @@ def atomic_json(path: Path, value: object) -> None:
 
 
 class FileProjectStorage:
-    def __init__(self, root: Path, disk_gib: int = 40, runner: Runner | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        disk_gib: int = 40,
+        runner: Runner | None = None,
+        base_image: Path | None = None,
+    ) -> None:
+        self.base_image = base_image
         self.root = root
         self.disk_gib = disk_gib
         self.runner = runner or CommandRunner()
@@ -121,50 +107,36 @@ class FileProjectStorage:
                     raise RuntimeError("Project storage is leased by another process") from exc
                 self._owners[key] = task
                 try:
-                    await durable_io(self._recover, self.directory(key))
                     yield
                 finally:
                     del self._owners[key]
                     fcntl.flock(stream, fcntl.LOCK_UN)
 
-    @staticmethod
-    def _recover(directory: Path) -> None:
-        journal = directory / "restore.json"
-        if journal.exists():
-            domains = json.loads(journal.read_text())
-            for domain in domains:
-                if domain not in ("environment", "workspace"):
-                    raise ValueError("Invalid restore journal")
-                stage = directory / f"{domain}.restore"
-                if stage.exists():
-                    stage.replace(directory / f"{domain}.img")
-            FileProjectStorage._sync_directory(directory)
-            journal.unlink()
-            FileProjectStorage._sync_directory(directory)
-
-    async def _disk(self, path: Path, gib: int, label: str) -> None:
-        if not 1 <= gib <= 16384:
-            raise ValueError("Disk size must be between 1 and 16384 GiB")
-        with path.open("xb") as stream:
-            stream.truncate(gib * 1024**3)
-        try:
-            await self.runner.run("mkfs.ext4", "-q", "-F", "-L", label, str(path))
-            await durable_io(self._sync_file, path)
-        except BaseException:
-            await durable_io(path.unlink, missing_ok=True)
-            raise
+    async def _provision(self, path: Path) -> None:
+        if self.base_image is None:
+            raise RuntimeError("Project creation requires the Nix-built base VM filesystem")
+        if not 1 <= self.disk_gib <= 16384:
+            raise ValueError("VM storage must be between 1 and 16384 GiB")
+        size = self.disk_gib * 1024**3
+        if size < self.base_image.stat().st_size:
+            raise ValueError("VM storage size is smaller than the base development machine")
+        await self._clone(self.base_image, path)
+        await self._grow(path, size)
 
     async def create(self, project_id: str) -> StorageInfo:
         async with self.lease(project_id):
             directory = self.directory(project_id)
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-            for domain in ("environment", "workspace"):
-                path = directory / f"{domain}.img"
-                if not path.exists():
-                    stage = directory / f"{domain}.new"
-                    stage.unlink(missing_ok=True)
-                    await self._disk(stage, self.disk_gib, f"td-{domain[:8]}")
+            path = directory / "vm.img"
+            if not path.exists():
+                stage = directory / "vm.new"
+                stage.unlink(missing_ok=True)
+                try:
+                    await self._provision(stage)
                     stage.replace(path)
+                except BaseException:
+                    await durable_io(stage.unlink, missing_ok=True)
+                    raise
             await durable_io(self._sync_directory, directory)
             await durable_io(self._sync_directory, directory.parent)
             await durable_io(self._sync_directory, self.root)
@@ -173,16 +145,13 @@ class FileProjectStorage:
     async def usage(self, project_id: str) -> StorageInfo:
         def read() -> StorageInfo:
             directory = self.directory(project_id)
-            env, workspace = directory / "environment.img", directory / "workspace.img"
-            e, w = env.stat(), workspace.stat()
+            path = directory / "vm.img"
+            info = path.stat()
             return StorageInfo(
                 project_id=identifier(project_id),
-                environment=env,
-                workspace=workspace,
-                environment_bytes=e.st_size,
-                workspace_bytes=w.st_size,
-                environment_allocated_bytes=e.st_blocks * 512,
-                workspace_allocated_bytes=w.st_blocks * 512,
+                vm_path=path,
+                virtual_size_bytes=info.st_size,
+                allocated_bytes=info.st_blocks * 512,
             )
 
         return await asyncio.to_thread(read)
@@ -198,6 +167,7 @@ class FileProjectStorage:
             str(destination),
             timeout=3600,
         )
+        await durable_io(destination.chmod, 0o600)
         await durable_io(self._sync_file, destination)
 
     @staticmethod
@@ -213,99 +183,24 @@ class FileProjectStorage:
         with path.open("rb") as stream:
             os.fsync(stream.fileno())
 
-    async def snapshot(self, project_id: str) -> SnapshotInfo:
+    async def _grow(self, path: Path, size: int) -> None:
+        if size < (await asyncio.to_thread(path.stat)).st_size:
+            raise ValueError("Shrinking VM storage is not supported")
+        result = await self.runner.run("e2fsck", "-pf", str(path), timeout=3600, check=False)
+        if result.returncode not in (0, 1):
+            raise RuntimeError("Filesystem check failed; refusing resize")
+        with path.open("r+b") as stream:
+            stream.truncate(size)
+            stream.flush()
+            os.fsync(stream.fileno())
+        await self.runner.run("resize2fs", str(path), timeout=3600)
+        await durable_io(self._sync_file, path)
+
+    async def resize(self, project_id: str, gib: int) -> None:
+        if not 1 <= gib <= 16384:
+            raise ValueError("Invalid VM storage size")
         async with self.lease(project_id):
-            info = await self.usage(project_id)
-            snapshot = SnapshotInfo(
-                id=str(uuid4()),
-                project_id=identifier(project_id),
-                created_at=datetime.now(UTC),
-                environment_bytes=info.environment_bytes,
-                workspace_bytes=info.workspace_bytes,
-            )
-            base = self.directory(project_id) / "snapshots"
-            base.mkdir(exist_ok=True)
-            stage = base / f".{snapshot.id}.new"
-            stage.mkdir()
-            try:
-                for domain in ("environment", "workspace"):
-                    await self._clone(
-                        self.directory(project_id) / f"{domain}.img", stage / f"{domain}.img"
-                    )
-                await durable_io(
-                    atomic_json, stage / "metadata.json", snapshot.model_dump(mode="json")
-                )
-                stage.replace(base / snapshot.id)
-                await durable_io(self._sync_directory, base)
-            except BaseException:
-                await durable_io(shutil.rmtree, stage, True)
-                raise
-            return snapshot
-
-    async def list_snapshots(self, project_id: str) -> list[SnapshotInfo]:
-        def read() -> list[SnapshotInfo]:
-            base = self.directory(project_id) / "snapshots"
-            return sorted(
-                (
-                    SnapshotInfo.model_validate_json(path.read_text())
-                    for path in base.glob("*/metadata.json")
-                    if not path.parent.name.startswith(".")
-                ),
-                key=lambda item: item.created_at,
-                reverse=True,
-            )
-
-        return await asyncio.to_thread(read)
-
-    async def restore(self, project_id: str, snapshot_id: str, domain: Domain = "all") -> None:
-        if domain not in ("environment", "workspace", "all"):
-            raise ValueError("Invalid storage domain")
-        async with self.lease(project_id):
-            directory = self.directory(project_id)
-            source = directory / "snapshots" / identifier(snapshot_id)
-            SnapshotInfo.model_validate_json((source / "metadata.json").read_text())
-            domains = ["environment", "workspace"] if domain == "all" else [domain]
-            try:
-                for part in domains:
-                    await self._clone(source / f"{part}.img", directory / f"{part}.restore")
-                await durable_io(atomic_json, directory / "restore.json", domains)
-                await durable_io(self._recover, directory)
-            except BaseException:
-                if not (directory / "restore.json").exists():
-                    for part in domains:
-                        (directory / f"{part}.restore").unlink(missing_ok=True)
-                raise
-
-    async def delete_snapshot(self, project_id: str, snapshot_id: str) -> None:
-        async with self.lease(project_id):
-            path = self.directory(project_id) / "snapshots" / identifier(snapshot_id)
-            await durable_io(shutil.rmtree, path)
-
-    async def reset_environment(self, project_id: str) -> None:
-        async with self.lease(project_id):
-            directory = self.directory(project_id)
-            stage = directory / "environment.new"
-            stage.unlink(missing_ok=True)
-            await self._disk(stage, self.disk_gib, "td-environm")
-            stage.replace(directory / "environment.img")
-            await durable_io(self._sync_directory, directory)
-
-    async def resize(
-        self, project_id: str, domain: Literal["environment", "workspace"], gib: int
-    ) -> None:
-        if domain not in ("environment", "workspace") or not 1 <= gib <= 16384:
-            raise ValueError("Invalid disk or size")
-        async with self.lease(project_id):
-            path = self.directory(project_id) / f"{domain}.img"
-            size = gib * 1024**3
-            if size < path.stat().st_size:
-                raise ValueError("Shrinking disks is not supported")
-            result = await self.runner.run("e2fsck", "-pf", str(path), timeout=3600, check=False)
-            if result.returncode not in (0, 1):
-                raise RuntimeError("Filesystem check failed; refusing resize")
-            with path.open("r+b") as stream:
-                stream.truncate(size)
-            await self.runner.run("resize2fs", str(path), timeout=3600)
+            await self._grow(self.directory(project_id) / "vm.img", gib * 1024**3)
 
     async def delete_project(self, project_id: str) -> None:
         async with self.lease(project_id):

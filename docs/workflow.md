@@ -27,8 +27,8 @@ The dashboard shows observed account usage, active Runs, projects, and schedules
 
 ## Inspect and continue
 
-When a project is idle, **Workspace** lets you browse files, preview source, sanitized Markdown and images, and download files or ZIP archives. **Environment** provides snapshots, selective restore, environment reset, and offline disk growth.
+When a project is idle, **Workspace** lets you browse files, preview source, sanitized Markdown and images, and download files or ZIP archives. **VM storage** shows total capacity and supports storage growth while the project is idle.
 
-The VM is disposable. `/workspace` and the persistent development environment are kept on separate disks and reused in the next VM. Cancelling or reaching a budget stops execution; it does not turn an incomplete project into a completed one. Execution outcomes and the last valid checkpoint are recorded separately.
+The project VM is persistent. Workspace files, installed tools, OS configuration, homes, and caches survive between Runs. Tokendrain attaches its current control software each time. Cancelling or reaching a budget stops execution; it does not turn an incomplete project into a completed one. Execution outcomes and the last valid checkpoint are recorded separately.
 
 Use feedback to change direction before the next Run. For host resource limits and recovery procedures, see [MicroVM operations](microvms.md).

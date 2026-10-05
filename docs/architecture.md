@@ -1,6 +1,6 @@
 # Architecture
 
-Tokendrain is a single-host service. Nix supplies the platform; the running application creates and manages projects. The host owns scheduling and long-lived credentials. Every execution boots a fresh microVM with the selected project's existing environment and workspace disks.
+Tokendrain is a single-host service. Nix supplies the platform; the running application creates and manages projects. The host owns scheduling and long-lived credentials. Every execution starts the selected project’s persistent development VM with the current read-only Tokendrain control bundle.
 
 ## Components and boundaries
 
@@ -16,8 +16,8 @@ flowchart LR
     Daemon -->|framed JSON over vsock| Guest[tokendrain-guestd]
     VMM --> Guest
     Guest -->|stdio JSON-RPC| Codex[Codex app-server]
-    Codex --> Environment[(Environment disk)]
-    Codex --> Workspace[(Workspace disk)]
+    Codex --> Machine[(Persistent project VM)]
+    Control[Current read-only control bundle] --> Guest
     Guest --> Runtime[Runtime credentials in tmpfs]
 ```
 
@@ -41,17 +41,12 @@ credentials/                Versioned encrypted credential records
 daemon.lock                 Exclusive application-state ownership
 locks/<project-id>.lock     Cross-process project storage leases
 projects/<project-id>/
-    environment.img         Tools, home, Nix state and Codex threads
-    workspace.img           Source tree and project data
-    snapshots/<snapshot-id>/
-        environment.img
-        workspace.img
-        metadata.json
+    vm.img                  Complete persistent development machine
 ```
 
 The default master key is separate at `/var/lib/tokendrain-keys/master.key` and reaches the daemon through a systemd runtime credential. VM records/sockets live under `/run/tokendrain-vms`; host authentication subprocesses use `/run/tokendrain-auth`. Guest runtime files are in the guest's `/run/tokendrain` tmpfs.
 
-SQLite contains relational projects, runs, executions, reports, usage observations, schedules, events, snapshot metadata, secret metadata, GitHub app/installations/project bindings, and settings. A project execution holds its model/reasoning configuration; project and execution records retain Codex thread IDs. OpenAI account records are encrypted files, not plaintext database rows. JSON columns hold typed flexible structures such as run templates, provider observations, reports, and environment metadata.
+SQLite contains relational projects, runs, executions, reports, usage observations, schedules, events, secret metadata, GitHub app/installations/project bindings, and settings. A project execution holds its model/reasoning configuration; project and execution records retain Codex thread IDs. OpenAI account records are encrypted files, not plaintext database rows. JSON columns hold typed flexible structures such as run templates, provider observations, reports, and storage metadata.
 
 Alembic migrations run before work is admitted. SQLite foreign keys, WAL, transactions, and uniqueness constraints provide durable coordination. Database transactions do not remain open across VM boot, network requests, or filesystem copies.
 
@@ -85,8 +80,8 @@ The supervisor owns execution tasks through structured concurrency. It enforces 
 ## Work lifecycle
 
 1. Reserve the project in SQLite and acquire its asyncio/process storage lease.
-2. Snapshot both offline disks. Snapshot preparation failure fails the execution before boot.
-3. Boot the immutable guest with persistent disks and bounded resources.
+2. Boot the project’s existing root filesystem with bounded resources and the current control bundle.
+3. Import missing control closure paths into the persistent Nix store and start current guestd.
 4. Connect over vsock, inject runtime credentials, and start Codex app-server.
 5. Resume the saved thread when available or start one. Supply the goal, Kanban board, feedback, previous state, integration capabilities, and secret names/descriptions.
 6. Read actual provider limits and request a substantial autonomous work unit. Save structured progress, then continue while the policy permits another turn.
@@ -128,7 +123,7 @@ Downtime is coalesced into one due occurrence rather than replaying every missed
 
 ## Storage and restart recovery
 
-Environment and workspace are separately manageable ext4 images. Snapshots use reflink copies with a sparse ordinary-copy fallback. Restore stages replacements and commits a durable journal before changing disks. Directory fsync ordering and cancellation-safe offloaded I/O retain the journal and lease until mutations finish.
+Each project owns one persistent root filesystem, cheaply cloned from a Nix-built base at creation. The OS, homes, configuration, Nix store/database, tools and `/workspace` persist together. The current read-only control payload imports only missing Nix closure paths at boot; it never replaces project userspace or overlays the project store. Storage supports idle growth only. Directory fsync ordering and cancellation-safe I/O retain the lease until mutations finish.
 
 On startup, the supervisor reconciles helper records and surviving VM services. It stops those machines before releasing reservations or admitting work. Interrupted active executions become failed with their disks preserved; queued executions remain available. Unconfirmed teardown keeps recovery blocked and the project reserved. Side-effecting turns are never automatically replayed after connection or process failure.
 

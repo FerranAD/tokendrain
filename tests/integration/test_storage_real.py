@@ -17,28 +17,24 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def test_real_ext4_snapshot_restore_resize_and_reset(tmp_path: Path) -> None:
-    storage = FileProjectStorage(tmp_path, disk_gib=1)
+async def test_real_ext4_clone_and_grow_preserves_machine(tmp_path: Path) -> None:
+    runner = CommandRunner()
+    base = tmp_path / "base.img"
+    with base.open("wb") as stream:
+        stream.truncate(128 * 1024**2)
+    await runner.run("mkfs.ext4", "-q", "-F", str(base))
+    seed = tmp_path / "seed.txt"
+    seed.write_text("persistent machine state\n")
+    await runner.run("debugfs", "-w", "-R", "mkdir /workspace", str(base))
+    await runner.run("debugfs", "-w", "-R", f"write {seed} /workspace/sentinel", str(base))
+    storage = FileProjectStorage(tmp_path, disk_gib=1, base_image=base)
     project = str(uuid4())
     info = await storage.create(project)
-    runner = CommandRunner()
-    seed = tmp_path / "seed.txt"
-    seed.write_text("persisted source tree\n")
-    await runner.run("debugfs", "-w", "-R", f"write {seed} /sentinel.txt", str(info.workspace))
-    await runner.run("debugfs", "-w", "-R", f"write {seed} /tool-cache.txt", str(info.environment))
-    snapshot = await storage.snapshot(project)
-    await runner.run("debugfs", "-w", "-R", "rm /sentinel.txt", str(info.workspace))
-    await storage.restore(project, snapshot.id, "workspace")
-    result = await runner.run("debugfs", "-R", "cat /sentinel.txt", str(info.workspace))
-    assert result.stdout == b"persisted source tree\n"
-    await storage.resize(project, "workspace", 2)
-    assert (await storage.usage(project)).workspace_bytes == 2 * 1024**3
-    result = await runner.run("e2fsck", "-fn", str(info.workspace), check=False)
+    await storage.resize(project, 2)
+    assert (await storage.usage(project)).virtual_size_bytes == 2 * 1024**3
+    result = await runner.run("e2fsck", "-fn", str(info.vm_path), check=False)
     assert result.returncode == 0
-    result = await runner.run("debugfs", "-R", "cat /sentinel.txt", str(info.workspace))
-    assert result.stdout == b"persisted source tree\n"
-    await storage.reset_environment(project)
-    result = await runner.run("debugfs", "-R", "stat /tool-cache.txt", str(info.environment))
-    assert b"File not found" in result.stderr
-    result = await runner.run("debugfs", "-R", "cat /sentinel.txt", str(info.workspace))
-    assert result.stdout == b"persisted source tree\n"
+    result = await runner.run("debugfs", "-R", "cat /workspace/sentinel", str(info.vm_path))
+    assert result.stdout == b"persistent machine state\n"
+    with pytest.raises(ValueError, match="Shrinking"):
+        await storage.resize(project, 1)

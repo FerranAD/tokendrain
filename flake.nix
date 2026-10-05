@@ -1,15 +1,12 @@
 {
-  description = "Persistent projects and disposable autonomous Codex microVMs";
+  description = "Persistent project VMs and current Tokendrain control bundles";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    microvm.url = "github:microvm-nix/microvm.nix";
-    microvm.inputs.nixpkgs.follows = "nixpkgs";
   };
   outputs =
     inputs@{
       self,
       nixpkgs,
-      microvm,
       ...
     }:
     let
@@ -22,9 +19,7 @@
         system:
         nixpkgs.lib.nixosSystem {
           inherit system;
-          specialArgs.tokendrainPackage = self.packages.${system}.tokendrain-guestd;
           modules = [
-            microvm.nixosModules.microvm
             ./nix/guest.nix
           ];
         };
@@ -46,7 +41,11 @@
             '';
           });
           tokendrain-guestd = app;
-          guest-artifacts = pkgs.callPackage ./nix/guest-artifacts.nix { inherit guest; };
+          control = pkgs.callPackage ./nix/control.nix { guestd = app; };
+          guest-artifacts = pkgs.callPackage ./nix/guest-artifacts.nix {
+            inherit guest;
+            control = self.packages.${system}.control;
+          };
           inherit web;
           default = self.packages.${system}.tokendrain;
         }
@@ -96,6 +95,14 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          # Same OS/base, deliberately different guestd code for the upgrade acceptance test.
+          upgradeGuestd = self.packages.${system}.tokendrain-guestd.overrideAttrs (old: {
+            postInstall = (old.postInstall or "") + ''
+              echo '__version__ = "control-test-B"' >> $out/${pkgs.python312.sitePackages}/tokendrain/__init__.py
+            '';
+          });
+          upgradeControl = pkgs.callPackage ./nix/control.nix { guestd = upgradeGuestd; };
+          upgradeArtifacts = self.packages.${system}.guest-artifacts.override { control = upgradeControl; };
         in
         {
           package = self.packages.${system}.tokendrain;
@@ -104,6 +111,7 @@
             inherit pkgs;
             tokendrainModule = self.nixosModules.tokendrain;
             guestArtifacts = self.packages.${system}.guest-artifacts;
+            guestArtifactsB = upgradeArtifacts;
           };
           module = pkgs.testers.runNixOSTest {
             name = "tokendrain-service";
@@ -111,7 +119,11 @@
               imports = [ self.nixosModules.tokendrain ];
               documentation.enable = false;
               services.tokendrain.enable = true;
-              services.tokendrain.auth.mode = "none";
+              services.tokendrain.auth.mode = "token";
+              services.tokendrain.auth.adminTokenFile = "/run/test-admin-token";
+              systemd.tmpfiles.rules = [
+                "f /run/test-admin-token 0600 root root - test-only-administrative-token-with-32-characters"
+              ];
               # Regression: coexist with forwarding already enabled by a VPN module.
               boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
               # Service/API smoke test does not boot a nested Firecracker VM.

@@ -109,7 +109,7 @@ async def test_project_run_reservation_crud(api: tuple[httpx.AsyncClient, Applic
     assert (await client.post("/api/v1/runs", json=template)).status_code == 409
     assert (await client.delete(f"/api/v1/projects/{first}")).status_code == 409
     assert (
-        await client.post(f"/api/v1/projects/{first}/environment/reset", json={})
+        await client.post(f"/api/v1/projects/{first}/storage/resize", json={"size_gib": 50})
     ).status_code == 409
     cancelled = await client.post(f"/api/v1/runs/{run['id']}/cancel", json={})
     assert cancelled.json()["cancel_requested"]
@@ -122,41 +122,30 @@ async def test_project_run_reservation_crud(api: tuple[httpx.AsyncClient, Applic
     assert (await client.get("/api/v1/projects/missing")).status_code == 404
 
 
-async def test_snapshots_domain_restore_reset_resize_and_delete(
-    api: tuple[httpx.AsyncClient, Application],
-):
+async def test_single_vm_storage_resize_and_delete(api: tuple[httpx.AsyncClient, Application]):
     client, services = api
     project = await new_project(client)
     storage = await services.storage.usage(project)
-    await asyncio.to_thread(storage.workspace.write_bytes, b"original workspace")
-    response = await client.post(f"/api/v1/projects/{project}/snapshots", json={"name": "safe"})
-    assert response.status_code == 201, response.text
-    snapshot = response.json()["id"]
-    await asyncio.to_thread(storage.workspace.write_bytes, b"modified workspace")
-    await asyncio.to_thread(storage.environment.write_bytes, b"keep environment")
-    restored = await client.post(
-        f"/api/v1/projects/{project}/snapshots/{snapshot}/restore", json={"scope": "workspace"}
-    )
-    assert restored.status_code == 200, restored.text
-    assert storage.workspace.read_bytes() == b"original workspace"
-    assert storage.environment.read_bytes() == b"keep environment"
+    response = await client.get(f"/api/v1/projects/{project}/storage")
+    assert response.json() == {
+        "virtual_size_bytes": storage.virtual_size_bytes,
+        "allocated_bytes": storage.allocated_bytes,
+    }
     assert (
-        await client.post(f"/api/v1/projects/{project}/environment/reset", json={})
+        await client.post(f"/api/v1/projects/{project}/storage/resize", json={"size_gib": 50})
     ).status_code == 200
-    assert storage.workspace.read_bytes() == b"original workspace"
-    assert storage.environment.read_bytes() != b"keep environment"
-    assert len((await client.get(f"/api/v1/projects/{project}/snapshots")).json()) == 2
     assert (
         await client.post(
             f"/api/v1/projects/{project}/storage/resize",
             json={"scope": "workspace", "size_gib": 50},
         )
-    ).status_code == 200
+    ).status_code == 422
+    assert (await client.get(f"/api/v1/projects/{project}/snapshots")).status_code == 404
     assert (
-        await client.delete(f"/api/v1/projects/{project}/snapshots/{snapshot}")
-    ).status_code == 204
+        await client.post(f"/api/v1/projects/{project}/environment/reset", json={})
+    ).status_code in (404, 405)
     assert (await client.delete(f"/api/v1/projects/{project}")).status_code == 204
-    assert not storage.workspace.exists()
+    assert not storage.vm_path.exists()
     assert (await client.get("/api/v1/projects")).json() == []
 
 

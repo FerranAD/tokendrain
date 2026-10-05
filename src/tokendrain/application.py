@@ -119,7 +119,13 @@ class Application:
             storage: ProjectStorage = overrides.storage or (
                 MockStorage(settings.state_dir, settings.default_disk_gib)
                 if settings.backend == "mock"
-                else FileProjectStorage(settings.state_dir, settings.default_disk_gib)
+                else FileProjectStorage(
+                    settings.state_dir,
+                    settings.default_disk_gib,
+                    base_image=settings.guest_artifacts / "base.img"
+                    if settings.guest_artifacts
+                    else None,
+                )
             )
             vm = overrides.vm or (
                 MockVmBackend()

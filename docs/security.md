@@ -22,7 +22,7 @@ Each VM has a separate TAP and source address. Default nftables policy allows IP
 
 `services.tokendrain.microvm.networking.allowLan = true` deliberately permits private/LAN destinations. Host input and other guests remain blocked. Do not manually remove the managed firewall table while machines are running. Internet access also permits agents to communicate with public services, including public endpoints you operate.
 
-CPU, guest memory, process count, concurrency, and disk capacities are bounded. Host free storage still needs monitoring: sparse disks can grow to their configured sizes and non-reflink snapshots need real capacity. Isolation is not a promise of unlimited resource availability.
+CPU, guest memory, process count, concurrency, and disk capacities are bounded. Host free storage still needs monitoring: sparse disks can grow to their configured sizes. Isolation is not a promise of unlimited resource availability.
 
 ## Credentials and retained data
 
@@ -47,7 +47,7 @@ Project disks and ordinary database content are not encrypted by the credential 
 
 Generic secrets are available to any software in the project's VM. Their descriptions help the agent understand intended use, but cannot restrict a key's actual provider permissions. Prefer credentials that are already scoped appropriately by the external service.
 
-Guestd injects values through child-process environment variables and files under `/run/tokendrain`, which is tmpfs. Managed credentials are removed on shutdown/disconnect. Snapshots of the environment/workspace disks do not include those runtime paths. However, guest root can copy a value into a persistent file, print it, or send it to a public endpoint. Runtime injection prevents default persistence; it cannot prevent intentional retention or disclosure by unrestricted guest code. Host swap and crash dumps also need appropriate protection if they are enabled.
+Guestd injects values through child-process environment variables and files under `/run/tokendrain`, which is tmpfs. Managed credentials are removed on shutdown/disconnect. The persistent project filesystem does not contain those managed runtime paths. However, guest root can copy a value into a persistent file, print it, or send it to a public endpoint. Runtime injection prevents default persistence; it cannot prevent intentional retention or disclosure by unrestricted guest code. Host swap and crash dumps also need appropriate protection if they are enabled.
 
 Known values are redacted from application execution logs where possible. Literal matching cannot remove every encoded, transformed, fragmented, or previously unknown secret. Firecracker console output is untrusted and may appear in the system journal without application redaction. Restrict journal readers, backup access, and retention.
 
@@ -75,6 +75,6 @@ For a consistent backup:
 4. Protect the backup as a full copy of project data and credentials. Keep another tested copy of the master key.
 5. Restart the daemon and re-enable schedules deliberately.
 
-Restore the matching state and key while services are stopped, with original ownership and restrictive permissions. A workspace-only snapshot restore does not restore database history, account credentials, or schedules. Snapshots on the same host are convenient rollback points, not independent backups.
+Restore the matching state and key while services are stopped, with original ownership and restrictive permissions. Backups must include project machines and the matching host database and encryption key.
 
 If a credential may have been disclosed, revoke or rotate it at its provider. Deleting a tokendrain secret prevents future injection but cannot remove copies already made by guest software. Disconnecting a project integration does not rewrite its workspace history.

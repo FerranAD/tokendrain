@@ -1792,7 +1792,7 @@ summary:hover {
 [data-theme='dark'] .workspace-source .hljs-literal {
   color: #e4b58b;
 }
-/* Settings, Environment and login */
+/* Settings, VM storage and login */
 .theme-cycle {
   border-radius: 50%;
 }

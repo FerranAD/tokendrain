@@ -33,8 +33,7 @@ export interface Project {
   last_run_at?: string | null;
   latest_report?: Report | null;
   latest_execution?: Execution | null;
-  environment_metadata?: Record<string, unknown>;
-  workspace_metadata?: Record<string, unknown>;
+  storage_metadata?: Record<string, unknown>;
 }
 
 export type StopCondition =
@@ -169,17 +168,8 @@ export interface Secret {
 }
 
 export interface StorageInfo {
-  environment: { size_bytes: number; used_bytes: number; path?: string };
-  workspace: { size_bytes: number; used_bytes: number; path?: string };
-}
-
-export interface Snapshot {
-  run_id?: string | null;
-  id: string;
-  name: string;
-  created_at: string;
-  environment_bytes?: number;
-  workspace_bytes?: number;
+  virtual_size_bytes: number;
+  allocated_bytes: number;
 }
 
 export interface LiveEvent {

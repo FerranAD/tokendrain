@@ -5,9 +5,9 @@ Deliver the NixOS-hosted daemon, persistent isolated Firecracker projects, Codex
 credential brokers, web interface, schedules, reports, and tested recovery paths.
 
 ## Implementation checklist
-- [x] Platform: flake, NixOS module, reproducible microvm.nix guest, privileged helper.
+- [x] Platform: flake, NixOS module, reproducible Nix-built Firecracker guest, privileged helper.
 - [x] Host: relational migrations, API, project/run state machines, scheduling, SSE.
-- [x] Execution: persistent disks, exclusive leases, snapshots, isolated networking.
+- [x] Execution: persistent disks, exclusive leases, isolated networking.
 - [x] Codex: typed RPC, guest protocol, unsupervised loop, usage predicates, reports.
 - [x] Credentials: current SIWC flow, import compatibility, refresh locking, GitHub Apps.
 - [x] UI: dashboard, projects, runs, schedules, settings, integration and storage controls.
@@ -66,7 +66,7 @@ no commit was created. Resume session can commit if Git metadata becomes writabl
 
 ## Final integration review
 
-- Actual browser against the daemon verified project/task/feedback/secrets/snapshot/restore/resize,
+- Actual browser against the daemon verified project/task/feedback/secrets/VM storage growth,
   run reports and SSE, history, scheduling and settings. Eleven Chromium tests pass.
 - Provider sign-in host identity now uses the officially required stable UUID URI format.
 - Project deletion and Run admission share SQLite writer transactions to prevent deletion races.

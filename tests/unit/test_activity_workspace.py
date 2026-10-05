@@ -92,20 +92,27 @@ async def test_workspace_worker_launch_does_not_require_parent_python_package_pa
     import json
     import os
     import pwd
+    import shutil
 
     from tokendrain.vm.helper import HelperConfig, InfrastructureService
 
     tools = tmp_path / "tools"
     tools.mkdir()
+    mkdir = shutil.which("mkdir")
+    assert mkdir
     for command in ("mount", "umount"):
         tool = tools / command
-        tool.write_text("#!/bin/sh\nexit 0\n")
+        tool.write_text(
+            f'#!/bin/sh\n{mkdir} -p "$6/workspace"\n'
+            if command == "mount"
+            else "#!/bin/sh\nexit 0\n"
+        )
         tool.chmod(0o700)
     monkeypatch.setenv("PATH", str(tools))
     monkeypatch.delenv("PYTHONPATH", raising=False)
     state = tmp_path / "state"
     state.mkdir()
-    disk = tmp_path / "workspace.img"
+    disk = tmp_path / "vm.img"
     disk.touch()
     user = pwd.getpwuid(os.getuid()).pw_name
     service = InfrastructureService(

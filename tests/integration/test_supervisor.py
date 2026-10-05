@@ -187,7 +187,7 @@ async def test_run_stops_at_completed_turn_budget_boundary(harness: Harness) -> 
     assert harness.session.closed and not harness.vm.handles
     assert state["executions"][0]["termination_reason"] == "usage_threshold"
     assert state["executions"][0]["report"]["usage"]["end"][0]["used_percent"] == 95
-    assert len(await harness.storage.list_snapshots(project)) == 1
+    assert (await harness.storage.usage(project)).vm_path.exists()
 
 
 async def test_unobservable_usage_fails_closed_and_preserves_feedback(harness: Harness) -> None:
@@ -297,21 +297,6 @@ async def test_runwide_elapsed_limit_stops_before_next_vm_boot(harness: Harness)
     state = await harness.runs.get(run)
     assert state["status"] == "stopped"
     assert "Runtime reached" in state["executions"][0]["termination_detail"]
-
-
-async def test_snapshot_failure_never_starts_vm(harness: Harness) -> None:
-    _, run, execution = await harness.run()
-
-    class FailingStorage(MockStorage):
-        async def snapshot(self, project_id: str) -> Any:
-            raise OSError("disk full")
-
-    storage = FailingStorage(harness.storage.root)
-    harness.supervisor.storage = storage
-    harness.projects.storage = storage
-    await harness.supervisor.execute(execution, asyncio.Event())
-    assert harness.vm.starts == 0
-    assert (await harness.runs.get(run))["status"] == "failed"
 
 
 async def test_scheduler_creates_ordinary_run_once_and_skips_overlap(harness: Harness) -> None:

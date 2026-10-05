@@ -159,7 +159,7 @@ function OpenAISettings() {
           <h3>Import Codex auth.json</h3>
           <p className="small muted">
             Import an existing Codex auth.json. The host interprets and stores it centrally; it is
-            never copied onto project disks.
+            never stored in project machines.
           </p>
           <label>
             Choose auth.json
@@ -543,7 +543,7 @@ function SystemForm({ system }: { system: SystemInfo }) {
           />
         </label>
         <label>
-          Default disk size, GiB
+          Default VM storage, GiB
           <input
             type="number"
             min={1}
@@ -555,8 +555,8 @@ function SystemForm({ system }: { system: SystemInfo }) {
         </label>
       </div>
       <p className="small muted">
-        Leave host memory available beyond concurrency × VM memory. Disk defaults apply to newly
-        created project storage.
+        Leave host memory available beyond concurrency × VM memory. VM storage defaults apply to
+        newly created project storage.
       </p>
       <UnsavedNotice dirty={draft.dirty} />
       <ActionNotice {...action} notice={draft.dirty ? undefined : action.notice} />

@@ -134,10 +134,9 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
       },
       '/runs/run-1234/events': [],
       '/projects/project-a/storage': {
-        environment: { size_bytes: 40000000000, used_bytes: 1800000000 },
-        workspace: { size_bytes: 40000000000, used_bytes: 2800000000 },
+        virtual_size_bytes: 40000000000,
+        allocated_bytes: 2800000000,
       },
-      '/projects/project-a/snapshots': [],
     };
     if (!(path in resources))
       return route.fulfill({ status: 404, json: { detail: `Unknown test resource ${path}` } });
@@ -334,12 +333,16 @@ test('schedules use the ordinary run template with timezone-aware timing', async
   expect(errors).toEqual([]);
 });
 
-test('mobile project navigation and environment controls do not overflow', async ({ page }) => {
+test('mobile project navigation and VM storage controls do not overflow', async ({ page }) => {
   const { errors } = await fixture(page);
+  await page.route('**/api/v1/projects/project-a/storage', (route) =>
+    route.fulfill({ json: { virtual_size_bytes: 80 * 1024 ** 3, allocated_bytes: 2800000000 } }),
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/projects/project-a');
-  await page.getByRole('button', { name: 'Environment', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Persistent storage' })).toBeVisible();
+  await page.getByRole('button', { name: 'VM storage', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'VM storage', exact: true })).toBeVisible();
+  await expect(page.getByLabel('New capacity, GiB')).toHaveValue('80');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

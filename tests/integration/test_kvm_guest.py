@@ -7,6 +7,7 @@ TOKENDRAIN_TEST_GUEST_ARTIFACTS=$(nix build .#guest-artifacts --no-link --print-
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -24,6 +25,25 @@ import pytest
 from tokendrain.protocol import GuestClient
 from tokendrain.storage import FileProjectStorage
 
+
+def synthetic_access_token() -> str:
+    # Synthetic claims only; no provider/account access is performed by command/exec.
+    claims = {
+        "sub": "test-user",
+        "email": "test@example.invalid",
+        "exp": time.time() + 3600,
+        "https://api.openai.com/auth": {
+            "chatgpt_account_id": "test-account",
+            "chatgpt_plan_type": "plus",
+        },
+    }
+
+    def encode(value: dict[str, Any]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    return encode({"alg": "RS256"}) + "." + encode(claims) + ".dGVzdA"
+
+
 pytestmark = [
     pytest.mark.kvm,
     pytest.mark.skipif(
@@ -34,9 +54,7 @@ pytestmark = [
 
 
 @asynccontextmanager
-async def boot(
-    directory: Path, artifacts: Path, environment: Path, workspace: Path
-) -> AsyncIterator[GuestClient]:
+async def boot(directory: Path, artifacts: Path, vm: Path) -> AsyncIterator[GuestClient]:
     binary = shutil.which("firecracker")
     if not binary:
         pytest.fail("Firecracker is missing; use nix develop")
@@ -51,22 +69,16 @@ async def boot(
         "machine-config": {"vcpu_count": 2, "mem_size_mib": 1536, "smt": False},
         "drives": [
             {
-                "drive_id": "store",
-                "path_on_host": str(artifacts / "store.img"),
+                "drive_id": "vm",
+                "path_on_host": str(vm),
+                "is_root_device": True,
+                "is_read_only": False,
+            },
+            {
+                "drive_id": "control",
+                "path_on_host": str(artifacts / "control.img"),
                 "is_root_device": False,
                 "is_read_only": True,
-            },
-            {
-                "drive_id": "environment",
-                "path_on_host": str(environment),
-                "is_root_device": False,
-                "is_read_only": False,
-            },
-            {
-                "drive_id": "workspace",
-                "path_on_host": str(workspace),
-                "is_root_device": False,
-                "is_read_only": False,
             },
         ],
         "vsock": {"guest_cid": 3, "uds_path": str(directory / "vsock.sock")},
@@ -114,53 +126,81 @@ async def boot(
 
 async def command(guest: GuestClient, script: str) -> dict[str, Any]:
     result = await guest.request(
-        "command/exec",
+        "codex_rpc_request",
         {
-            "command": ["/bin/sh", "-c", script],
-            "cwd": "/workspace",
-            "sandboxPolicy": {"type": "dangerFullAccess"},
+            "method": "command/exec",
+            "params": {
+                "command": ["/bin/sh", "-c", script],
+                "cwd": "/workspace",
+                "sandboxPolicy": {"type": "dangerFullAccess"},
+            },
         },
     )
     assert result["exitCode"] == 0, result
     return result
 
 
-async def start_codex(guest: GuestClient) -> None:
+async def start_codex(guest: GuestClient, secrets: dict[str, str] | None = None) -> None:
     await guest.credentials_set(
         {
             "openai": {
                 "mode": "chatgpt",
-                "access_token": "test-only-no-network",
+                "access_token": synthetic_access_token(),
                 "expires_at": time.time() + 3600,
-            }
+                "account_id": "test-account",
+                "plan_type": "plus",
+            },
+            "secrets": secrets or {},
         }
     )
     await guest.request("codex_start")
 
 
-async def test_real_guest_vsock_and_persistent_disks() -> None:
+async def test_persistent_machine_and_current_control() -> None:
     artifacts = Path(os.environ["TOKENDRAIN_TEST_GUEST_ARTIFACTS"])
     # Keep UDS paths below Linux's 108-byte sockaddr_un limit.
     with tempfile.TemporaryDirectory(prefix="tdvm-", dir="/tmp") as temporary:
         directory = Path(temporary)
-        storage = FileProjectStorage(directory, disk_gib=1)
+        storage = FileProjectStorage(directory, disk_gib=12, base_image=artifacts / "base.img")
         project = str(uuid4())
         info = await storage.create(project)
-        async with boot(directory / "first", artifacts, info.environment, info.workspace) as guest:
-            assert (await guest.request("guest_info"))["workspace"] == "/workspace"
-            await start_codex(guest)
+        async with boot(directory / "first", artifacts, info.vm_path) as guest:
+            first_control = await guest.request("guest_info")
+            assert first_control["workspace"] == "/workspace"
+            assert first_control["control_version"] == "0.1.0"
+            await start_codex(guest, {"TD_TEMPORARY": "synthetic-secret"})
             await command(
                 guest,
                 "set -e; printf workspace-persisted > /workspace/sentinel; "
-                "printf environment-persisted > /root/sentinel; "
-                "nix-store --add /root/sentinel > /workspace/store-path; "
+                "mkdir -p /root/.config /opt; printf home > /root/.config/sentinel; "
+                "printf opt > /opt/sentinel; printf config > /etc/tokendrain-sentinel; "
+                "nix-store --add /root/.config/sentinel > /workspace/store-path; "
+                "mkdir -p /root/test-tool/bin; "
+                "printf '#!/bin/sh\\nprintf persistent-tool\\n' "
+                "> /root/test-tool/bin/td-test-tool; "
+                "chmod +x /root/test-tool/bin/td-test-tool; "
+                'nix-env -i "$(nix-store --add /root/test-tool)"; '
+                "printf '#!/bin/sh\\nexit 99\\n' > /root/test-tool/bin/codex; "
+                "chmod +x /root/test-tool/bin/codex; "
+                'nix-env -i "$(nix-store --add /root/test-tool)"; '
+                "grep synthetic-secret /run/tokendrain/secrets.json >/dev/null; "
                 "printf ephemeral > /run/tokendrain/ephemeral; sync",
             )
-        async with boot(directory / "second", artifacts, info.environment, info.workspace) as guest:
+        updated = Path(os.environ.get("TOKENDRAIN_TEST_UPGRADE_ARTIFACTS", str(artifacts)))
+        async with boot(directory / "second", updated, info.vm_path) as guest:
+            current_control = await guest.request("guest_info")
+            if updated != artifacts:
+                assert current_control["control_version"] == "control-test-B"
+                assert current_control["guestd"] != first_control["guestd"]
+            assert current_control["codex_executable"].startswith("/nix/store/")
             await start_codex(guest)
             result = await command(
                 guest,
                 'set -e; nix-store --check-validity "$(cat /workspace/store-path)"; '
-                "cat /workspace/sentinel /root/sentinel; test ! -e /run/tokendrain/ephemeral",
+                "cat /workspace/sentinel /root/.config/sentinel /opt/sentinel "
+                "/etc/tokendrain-sentinel; "
+                "td-test-tool; test ! -e /run/tokendrain/ephemeral; "
+                "! grep synthetic-secret /run/tokendrain/secrets.json; "
+                "nix-store --check-validity " + first_control["guestd"],
             )
-            assert result["stdout"] == "workspace-persistedenvironment-persisted"
+            assert result["stdout"] == "workspace-persistedhomeoptconfigpersistent-tool"

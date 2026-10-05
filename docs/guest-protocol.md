@@ -89,7 +89,7 @@ stdin/stdout. It initializes exactly once per process, with client name
 `tokendrain` and experimental API capability for the imported-token path. Host
 `initialize` calls return the saved initialization result. `thread/start`,
 `thread/resume`, `turn/start` and `turn/completed` update guest runtime state.
-Persistent Codex home `/persist/codex` retains thread rollouts across VM boots.
+Persistent Codex home `/root/.local/share/tokendrain/codex` retains thread rollouts across VM boots.
 Work occurs in `/workspace` with `approvalPolicy=never`,
 `thread/start.sandbox="danger-full-access"`, and
 `turn/start.sandboxPolicy.type="dangerFullAccess"`.

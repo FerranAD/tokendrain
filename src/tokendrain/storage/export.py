@@ -193,7 +193,7 @@ def main() -> None:
         try:
             try:
                 result = workspace_operation(
-                    mount, destination, operation, path, allow_large == "1"
+                    mount / "workspace", destination, operation, path, allow_large == "1"
                 )
             except FileNotFoundError:
                 result = {"error": "Workspace entry not found", "status": 404}

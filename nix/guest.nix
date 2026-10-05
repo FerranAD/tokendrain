@@ -1,52 +1,36 @@
+{ lib, pkgs, ... }:
 {
-  config,
-  lib,
-  pkgs,
-  tokendrainPackage,
-  ...
-}:
-{
+  documentation.enable = false;
   system.stateVersion = "26.05";
   networking.hostName = "tokendrain-project";
-  microvm = {
-    hypervisor = "firecracker";
-    vcpu = 4;
-    mem = 4096;
-    socket = "firecracker.sock";
-    vsock.cid = 3;
-    writableStoreOverlay = "/persist";
-    volumes = [
-      {
-        image = "environment.img";
-        mountPoint = "/persist";
-        size = 40960;
-        autoCreate = false;
-        fsType = "ext4";
-      }
-      {
-        image = "workspace.img";
-        mountPoint = "/workspace";
-        size = 40960;
-        autoCreate = false;
-        fsType = "ext4";
-      }
-    ];
-  };
-  fileSystems."/persist".neededForBoot = true;
-  fileSystems."/workspace".neededForBoot = true;
-  boot.kernelModules = [
+  boot.loader.grub.enable = false;
+  boot.initrd.systemd.enable = false;
+  boot.initrd.availableKernelModules = [
+    "virtio_pci"
+    "virtio_mmio"
+    "virtio_blk"
+  ];
+  # Load host-kernel drivers before entering the project's long-lived userspace.
+  # Its historical module tree may belong to a different kernel after a host upgrade.
+  boot.initrd.kernelModules = [
     "virtio_net"
     "vmw_vsock_virtio_transport"
   ];
   boot.kernelParams = [ "net.ifnames=0" ];
-  boot.postBootCommands = lib.mkBefore ''
-    # Run before microvm.nix registers the immutable closure in the Nix DB.
-    mkdir -p /persist/root /persist/nix-var /persist/var-lib /persist/var-cache
-    mkdir -p /root /nix/var /var/lib /var/cache
-    mount --bind /persist/root /root
-    mount --bind /persist/nix-var /nix/var
-    mount --bind /persist/var-lib /var/lib
-    mount --bind /persist/var-cache /var/cache
+  fileSystems."/" = {
+    device = "/dev/vda";
+    fsType = "ext4";
+  };
+  fileSystems."/run/tokendrain-control" = {
+    device = "/dev/vdb";
+    fsType = "ext4";
+    options = [
+      "ro"
+      "nodev"
+      "nosuid"
+    ];
+  };
+  boot.postBootCommands = ''
     if [[ " $(cat /proc/cmdline)" =~ [[:space:]]ip=([^[:space:]]+) ]]; then
       IFS=: read -r address _ gateway _ _ _ _ <<< "''${BASH_REMATCH[1]}"
       mkdir -p /run/systemd/network
@@ -97,8 +81,6 @@
     rustup
     cacert
     nix
-    codex
-    tokendrainPackage
     util-linux
     iproute2
     ripgrep
@@ -113,25 +95,28 @@
   ];
   environment.variables = {
     HOME = "/root";
-    CODEX_HOME = "/persist/codex";
     SSL_CERT_FILE = "/etc/ssl/certs/ca-bundle.crt";
   };
   users.users.root.initialHashedPassword = "!";
-  systemd.services.tokendrain-guestd = {
-    description = "Tokendrain guest supervisor (vsock)";
+  systemd.tmpfiles.rules = [ "d /workspace 0755 root root -" ];
+  # Stable boot contract. All version-specific control code is on the attached volume.
+  systemd.services.tokendrain-control = {
+    description = "Activate current Tokendrain control bundle";
     wantedBy = [ "multi-user.target" ];
     after = [
       "local-fs.target"
       "network.target"
     ];
-    requires = [
-      "persist.mount"
-      "workspace.mount"
+    requires = [ "run-tokendrain\\x2dcontrol.mount" ];
+    path = [
+      pkgs.nix
+      pkgs.coreutils
     ];
-    path = config.environment.systemPackages;
-    environment = config.environment.variables;
+    environment = {
+      HOME = "/root";
+    };
     serviceConfig = {
-      ExecStart = "${tokendrainPackage}/bin/tokendrain-guestd --poweroff-on-shutdown";
+      ExecStart = "/run/tokendrain-control/activate";
       User = "root";
       Restart = "on-failure";
       RestartSec = 2;

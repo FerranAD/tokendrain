@@ -53,7 +53,7 @@ uv run mypy
 uv run pytest -m 'not kvm and not nix'
 ```
 
-Tests cover stop policies, window normalization, state transitions, cron/DST calculations, encryption/redaction, token refresh locking, JSON-RPC correlation and failure handling, guest credential rotation, migrations, service/API behavior, scheduling, and recovery. Real ext4 storage tests exercise image creation, copying, restore and resize using ordinary unprivileged files. HTTP/provider and VM/session dependencies have explicit fake implementations.
+Tests cover stop policies, window normalization, state transitions, cron/DST calculations, encryption/redaction, token refresh locking, JSON-RPC correlation and failure handling, guest credential rotation, migrations, service/API behavior, scheduling, and recovery. Real ext4 storage tests exercise base filesystem cloning and storage growth using ordinary unprivileged files. HTTP/provider and VM/session dependencies have explicit fake implementations.
 
 Use targeted test files while iterating, then run the full ordinary suite before a milestone. External account tests should never borrow credentials from a developer's home directory implicitly.
 
@@ -87,7 +87,7 @@ TOKENDRAIN_LIVE_TOKEN_FILE="$PWD/../.dev-state/admin-token" \
 npm test -- tests/live-daemon.spec.ts
 ```
 
-This opt-in test verifies `backend=mock` before changing application data. It creates and removes its own project and schedule, exercises tasks/feedback, described secrets, snapshots/restore/resize, an ordinary run/report/live events, history, and settings. The token is read directly from the protected file without printing it; trace recording is disabled. Use dedicated development state, never a production daemon. The fixture suite has ten tests; with the live smoke enabled, all eleven have passed against the implemented daemon.
+This opt-in test verifies `backend=mock` before changing application data. It creates and removes its own project and schedule, exercises tasks/feedback, described secrets, VM storage growth, an ordinary run/report/live events, history, and settings. The token is read directly from the protected file without printing it; trace recording is disabled. Use dedicated development state, never a production daemon. The fixture suite has ten tests; with the live smoke enabled, all eleven have passed against the implemented daemon.
 
 ## Real KVM tests
 
@@ -95,10 +95,11 @@ First check host access with `tokendrain doctor` and confirm `/dev/kvm` can be o
 
 ```sh
 export TOKENDRAIN_TEST_GUEST_ARTIFACTS="$(nix build .#guest-artifacts --no-link --print-out-paths)"
+export TOKENDRAIN_TEST_UPGRADE_ARTIFACTS="$(nix build .#checks.x86_64-linux.firecracker.upgradeArtifacts --no-link --print-out-paths)"
 nix develop -c .venv/bin/pytest tests/integration/test_kvm_guest.py -m kvm -v
 ```
 
-The test checks workspace/home state across boots, Nix database/overlay behavior, and runtime credential removal. It requires working KVM access and skips when its opt-in artifact configuration is absent. It does not establish OpenAI entitlement or validate a real OAuth login.
+The test checks workspace/home state across boots, persistent Nix store/database and control updates, and runtime credential removal. It requires working KVM access and skips when its opt-in artifact configuration is absent. It does not establish OpenAI entitlement or validate a real OAuth login.
 
 The privileged helper and network policy are tested inside disposable NixOS machines:
 
@@ -151,4 +152,4 @@ For a guest change, rebuild `guest-artifacts` before the KVM test. For a Python 
 | `modules`, `nix` | NixOS deployment, guest image and VM tests |
 | `tests` | Python unit and integration tests |
 
-External interfaces are version-sensitive. Check official provider documentation and the pinned executable's generated schema before changing Codex JSON-RPC, Firecracker, microvm.nix, or GitHub behavior. The [OpenAI](openai-auth.md), [GitHub](github-app.md), [guest protocol](guest-protocol.md), and [microVM](microvms.md) documents record implemented semantics and source links.
+External interfaces are version-sensitive. Check official provider documentation and the pinned executable's generated schema before changing Codex JSON-RPC, Firecracker, or GitHub behavior. The [OpenAI](openai-auth.md), [GitHub](github-app.md), [guest protocol](guest-protocol.md), and [microVM](microvms.md) documents record implemented semantics and source links.

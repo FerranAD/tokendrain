@@ -82,7 +82,7 @@ def inspect_vm_checks(
     artifacts = guest_artifacts
     missing = [
         name
-        for name in ("kernel", "initrd", "store.img", "manifest.json")
+        for name in ("kernel", "initrd", "base.img", "control.img", "manifest.json")
         if artifacts is None or not os.access(artifacts / name, os.R_OK)
     ]
     checks.append(

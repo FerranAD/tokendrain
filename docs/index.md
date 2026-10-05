@@ -42,9 +42,9 @@ Agents work In progress and Todo. Discoveries stay in Backlog until you approve 
 
 <div class="td-card" markdown>
 
-### A fresh VM. A lasting workspace.
+### A persistent development machine.
 
-Each execution boots a Firecracker VM. Source files, installed tools, home, and caches stay on the project's disks.
+Each execution boots a Firecracker VM. The entire project machine persists, while Tokendrain control software is current at every Run and managed credentials are temporary.
 
 [Understand persistence →](microvms.md)
 

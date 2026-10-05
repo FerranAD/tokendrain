@@ -122,7 +122,7 @@ class InfrastructureService:
         )
         return result.stdout.strip() in (b"active", b"activating", b"deactivating", b"reloading")
 
-    def _open_disk(self, project_id: str, domain: str) -> int:
+    def _open_disk(self, project_id: str) -> int:
         descriptor = os.open(self.config.state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             for part in ("projects", str(UUID(project_id))):
@@ -131,7 +131,7 @@ class InfrastructureService:
                 )
                 os.close(descriptor)
                 descriptor = child
-            disk = os.open(f"{domain}.img", os.O_RDWR | os.O_NOFOLLOW, dir_fd=descriptor)
+            disk = os.open("vm.img", os.O_RDWR | os.O_NOFOLLOW, dir_fd=descriptor)
             metadata = os.fstat(disk)
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 os.close(disk)
@@ -223,22 +223,16 @@ class InfrastructureService:
                 },
                 "drives": [
                     {
-                        "drive_id": "store",
-                        "path_on_host": "/artifacts/store.img",
+                        "drive_id": "vm",
+                        "path_on_host": "/disks/vm.img",
+                        "is_root_device": True,
+                        "is_read_only": False,
+                    },
+                    {
+                        "drive_id": "control",
+                        "path_on_host": "/artifacts/control.img",
                         "is_root_device": False,
                         "is_read_only": True,
-                    },
-                    {
-                        "drive_id": "environment",
-                        "path_on_host": "/disks/environment.img",
-                        "is_root_device": False,
-                        "is_read_only": False,
-                    },
-                    {
-                        "drive_id": "workspace",
-                        "path_on_host": "/disks/workspace.img",
-                        "is_root_device": False,
-                        "is_read_only": False,
                     },
                 ],
                 "network-interfaces": [
@@ -284,10 +278,9 @@ class InfrastructureService:
                 f"BindReadOnlyPaths={base / 'firecracker.json'}:/firecracker.json",
                 f"BindReadOnlyPaths={self.config.guest_artifacts.resolve()}:/artifacts",
             ]
-            for domain in ("environment", "workspace"):
-                fd = self._open_disk(spec.project_id, domain)
-                descriptors.append(fd)
-                properties.append(f"BindPaths=/proc/{os.getpid()}/fd/{fd}:/disks/{domain}.img")
+            fd = self._open_disk(spec.project_id)
+            descriptors.append(fd)
+            properties.append(f"BindPaths=/proc/{os.getpid()}/fd/{fd}:/disks/vm.img")
             command = [
                 "systemd-run",
                 f"--unit={unit_name(spec.execution_id)}",
@@ -361,7 +354,7 @@ class InfrastructureService:
         self, project_id: str, operation: str = "archive", path: str = "", allow_large: bool = False
     ) -> dict[str, Any]:
         """Pin both image and output descriptors before entering the worker namespace."""
-        disk_fd = self._open_disk(project_id, "workspace")
+        disk_fd = self._open_disk(project_id)
         state_fd: int | None = None
         directory_fd: int | None = None
         output_fd: int | None = None

@@ -3,11 +3,11 @@
 - [x] Define versioned HTTP/SSE contract in `web/API.md`.
 - [x] Build dashboard and project management, including persistent task/feedback editing and task progress derived from checkboxes.
 - [x] Build run preparation, execution detail, reports, cancellation, and SSE event delivery.
-- [x] Build schedules, session/OpenAI authentication, GitHub App setup and narrowed repository permissions, described `.env` bundles, and environment/snapshot controls.
+- [x] Build schedules, session/OpenAI authentication, GitHub App setup and narrowed repository permissions, described `.env` bundles, and VM storage controls.
 - [x] Build and strictly type-check frontend; document workflow in `web/README.md`.
 - [x] Run ten Chromium fixture tests covering the API contract, login storage behavior, project/run/schedule creation, task edits, secret descriptions, GitHub permissions and setup return, cancellation, SSE text rendering, and mobile layout.
 - [x] Inspect desktop dashboard and mobile environment screenshots.
-- [x] Run the browser against the real daemon with explicit mock storage/execution: project creation, tasks/feedback, secrets, snapshots/restore/resize, run/report/SSE, history, schedules, and defaults.
+- [x] Run the browser against the real daemon with explicit mock storage/execution: project creation, tasks/feedback, secrets, VM storage growth, run/report/SSE, history, schedules, and defaults.
 - [x] Add authenticated GitHub discovery prompt after the public setup callback; ignore returned installation identifiers.
 
 Validation: `npm run build` passes; `npm test` passes 11/11 with Nix Chromium and the live-daemon opt-in variables. Ten browser tests use explicit intercepted API fixtures; the eleventh uses the real daemon API and persistent SQLite with a mock VM backend. No browser JavaScript errors occurred. Real OpenAI sign-in and GitHub installation/repository writes require the user's provider accounts.

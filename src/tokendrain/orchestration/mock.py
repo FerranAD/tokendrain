@@ -12,18 +12,13 @@ from tokendrain.vm.models import VmHandle, VmSpec
 
 
 class MockStorage(FileProjectStorage):
-    async def _disk(self, path: Path, gib: int, label: str) -> None:
-        await asyncio.to_thread(path.write_bytes, b"Tokendrain simulated disk\n")
+    async def _provision(self, path: Path) -> None:
+        await asyncio.to_thread(path.write_bytes, b"Tokendrain simulated machine\n")
 
-    async def _clone(self, source: Path, destination: Path) -> None:
-        import shutil
-
-        await asyncio.to_thread(shutil.copyfile, source, destination)
-
-    async def resize(self, project_id: str, domain: str, gib: int) -> None:
-        if domain not in {"environment", "workspace"} or gib < 1:
+    async def resize(self, project_id: str, gib: int) -> None:
+        if gib < 1:
             raise ValueError("Invalid resize")
-        # Simulation intentionally does not allocate giant fake disks.
+        # Simulation intentionally does not allocate giant fake machines.
         async with self.lease(project_id):
             await self.usage(project_id)
 

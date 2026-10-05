@@ -29,9 +29,6 @@ def upgrade() -> None:
         "UPDATE project_executions SET termination_reason='infrastructure_error', "
         "interrupted=1 WHERE status='failed' AND error IS NOT NULL"
     )
-    with op.batch_alter_table("project_snapshots") as batch:
-        batch.add_column(sa.Column("run_id", sa.String(32)))
-        batch.create_foreign_key("fk_snapshot_run", "runs", ["run_id"], ["id"], ondelete="SET NULL")
     with op.batch_alter_table("projects") as batch:
         batch.drop_column("task_log")
     op.create_table(
@@ -58,9 +55,6 @@ def downgrade() -> None:
     op.drop_table("project_tasks")
     with op.batch_alter_table("projects") as batch:
         batch.add_column(sa.Column("task_log", sa.Text(), nullable=False, server_default=""))
-    with op.batch_alter_table("project_snapshots") as batch:
-        batch.drop_constraint("fk_snapshot_run", type_="foreignkey")
-        batch.drop_column("run_id")
     for name in ("termination_reason", "termination_detail", "threshold_mode", "interrupted"):
         op.drop_column("project_executions", name)
     op.drop_column("runs", "threshold_mode")

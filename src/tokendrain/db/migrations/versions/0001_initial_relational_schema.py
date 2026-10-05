@@ -60,8 +60,7 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=24), nullable=False),
         sa.Column("default_model", sa.String(length=200), nullable=False),
         sa.Column("default_reasoning_effort", sa.String(length=24), nullable=False),
-        sa.Column("environment_metadata", sa.JSON(), nullable=False),
-        sa.Column("workspace_metadata", sa.JSON(), nullable=False),
+        sa.Column("storage_metadata", sa.JSON(), nullable=False),
         sa.Column("thread_id", sa.String(length=200), nullable=True),
         sa.Column("last_run_at", sa.DateTime(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
@@ -97,22 +96,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["project_id"], ["projects.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("project_id"),
     )
-    op.create_table(
-        "project_snapshots",
-        sa.Column("id", sa.String(length=64), nullable=False),
-        sa.Column("project_id", sa.String(length=32), nullable=False),
-        sa.Column("name", sa.String(length=200), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("environment_bytes", sa.Integer(), nullable=False),
-        sa.Column("workspace_bytes", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    with op.batch_alter_table("project_snapshots", schema=None) as batch_op:
-        batch_op.create_index(
-            batch_op.f("ix_project_snapshots_project_id"), ["project_id"], unique=False
-        )
-
     op.create_table(
         "runs",
         sa.Column("id", sa.String(length=32), nullable=False),
@@ -228,10 +211,6 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_runs_status"))
 
     op.drop_table("runs")
-    with op.batch_alter_table("project_snapshots", schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f("ix_project_snapshots_project_id"))
-
-    op.drop_table("project_snapshots")
     op.drop_table("project_github_integrations")
     op.drop_table("settings")
     with op.batch_alter_table("schedules", schema=None) as batch_op:
