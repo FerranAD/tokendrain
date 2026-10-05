@@ -66,7 +66,7 @@ npm run format:check
 npm run build
 ```
 
-The browser suite uses Playwright with explicit API fixtures. It checks login/token storage, provider-derived window labels, project/run/schedule submission, task edits, secret descriptions, GitHub scope selection, SSE text rendering, cancellation, and mobile overflow.
+The browser suite uses Playwright with explicit API fixtures. It checks login/token storage, provider-derived window labels, project/run/schedule submission, task edits, secret descriptions, GitHub access modes and repository conflicts, SSE text rendering, cancellation, and mobile overflow.
 
 On NixOS, use a Nix Chromium executable:
 
@@ -118,7 +118,7 @@ Provider mocks, the installed Codex protocol smoke, and real guest boots pass wi
 2. Run a small disposable project with an available model, inspect its output and report, then run it again to verify continuation using real inference.
 3. Keep a run active through token expiry to validate actual provider refresh and thread recovery. Mock tests cover the protocol and locking; they cannot establish account entitlement or provider behavior.
 4. Inspect the account's actual usage windows and exercise a matching budget threshold. Use duration or provider exhaustion if the connected provider does not expose percentage windows.
-5. Install a self-owned GitHub App on a disposable repository, grant a limited project scope, and verify a branch push and pull request. Repeat through installation-token renewal.
+5. Connect GitHub on a private browser-facing URL and install it on a disposable repository. Select Pull requests and verify a feature-branch push and PR, a rejected default-branch push with the guest token, and a successful human administrator push. Repeat through token renewal, then test shared-project cleanup, Direct write and a private Free-plan capability rejection.
 
 Live credential import, paid/plan inference, multi-hour provider rotation and GitHub writes have not been performed as part of the automated test suite. Keep those acceptance runs separate from production projects.
 
@@ -153,3 +153,12 @@ For a guest change, rebuild `guest-artifacts` before the KVM test. For a Python 
 | `tests` | Python unit and integration tests |
 
 External interfaces are version-sensitive. Check official provider documentation and the pinned executable's generated schema before changing Codex JSON-RPC, Firecracker, or GitHub behavior. The [OpenAI](openai-auth.md), [GitHub](github-app.md), [guest protocol](guest-protocol.md), and [microVM](microvms.md) documents record implemented semantics and source links.
+
+
+## GitHub API contract verification
+
+The integration follows GitHub’s [manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest), [installation token permissions and repository narrowing](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app), and [repository ruleset REST API](https://docs.github.com/en/rest/repos/rules). The manifest disables delivery (`hook_attributes.active=false`), supplies no events, and disables OAuth on install. Browser state is included in the registration action query and the form; callbacks use the configured private origin.
+
+The host creates/updates/deletes repository rulesets with Administration write, targeting `~DEFAULT_BRANCH`, with `pull_request` (zero required reviews), `deletion` and `non_fast_forward` rules. Bypass is only `RepositoryRole`, ID `5`, mode `always`. GitHub’s REST reference names actor types but does not enumerate built-in role IDs; the [GitHub Terraform provider’s ruleset reference](https://github.com/integrations/terraform-provider-github/blob/main/docs/resources/repository_ruleset.md) documents admin as `5`. No Integration bypass is included. Guest tokens omit Administration and request Workflows write only when enabled.
+
+Focused automated checks cover state forgery, browser binding, expiry/replay, repository-scoped guest tokens, the guestd administration invariant, serialized mode conflicts, shared rule lifecycle and GitHub capability rejection. These checks validate API payloads and local safety behavior; live GitHub acceptance requires an account and a disposable repository and is not performed by fixture tests.

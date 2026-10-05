@@ -1,4 +1,6 @@
+import hashlib
 import json
+import secrets
 import time
 from collections.abc import Awaitable, Callable
 from functools import wraps
@@ -37,6 +39,7 @@ from tokendrain.db.models import (
     Event,
     GitHubApp,
     GitHubInstallation,
+    GitHubPolicy,
     Project,
     ProjectExecution,
     ProjectGitHub,
@@ -56,7 +59,8 @@ from tokendrain.domain import (
     utcnow,
 )
 from tokendrain.events import event_json
-from tokendrain.github.provider import GitHubConfig, IntegrationInput
+from tokendrain.github.policy import reconcile_all, reserve_pr_policy
+from tokendrain.github.provider import IntegrationInput, RepositoryInput, app_manifest
 from tokendrain.notifications import NtfyInput
 from tokendrain.scheduler.service import next_occurrence
 from tokendrain.secrets import SecretService, parse_dotenv
@@ -131,17 +135,20 @@ async def create_project(request: Request, body: ProjectCreateInput) -> Any:
     services = current(request)
     ready(services)
     credential_ref = None
+    binding = None
     if body.github:
         app = await github_app(services)
         credential_ref = app.credential_ref
-        await validate_github_repository(request, body.github)
+        binding = await resolve_github_repository(request, body.github)
         async with services.sessions() as db:
-            await validate_github_access(db, body.github, credential_ref)
+            await validate_github_access(db, binding, credential_ref)
     project_id = await services.projects.create(
         ProjectCreate.model_validate(body.model_dump(exclude={"github"})),
-        body.github,
+        binding,
         credential_ref,
     )
+    if binding:
+        await reconcile_saved(services)
     return encoded(await services.projects.get(project_id))
 
 
@@ -328,6 +335,7 @@ async def remove_project(request: Request, project_id: str) -> Response:
         await services.storage.delete_project(project_id)
         for ref in refs:
             await services.credentials.delete(ref)
+    await reconcile_saved(services)
     await services.events.publish("project.deleted", project_id=project_id)
     return Response(status_code=204)
 
@@ -641,15 +649,16 @@ async def github_status(request: Request) -> Any:
     services = current(request)
     async with services.sessions() as db:
         app = await db.get(GitHubApp, 1)
-        installations = (await db.scalars(select(GitHubInstallation))).all()
+        inventory = await db.get(Setting, "github_repositories")
+        policies = (await db.scalars(select(GitHubPolicy))).all()
         return {
             "configured": app is not None,
-            "app_id": app.app_id if app else None,
-            "app_slug": app.slug if app else None,
+            "name": app.slug if app else None,
+            "repository_count": len(inventory.value.get("repositories", [])) if inventory else 0,
             "installation_url": f"https://github.com/apps/{app.slug}/installations/new"
             if app
             else None,
-            "installations": [{**columns(row), "id": str(row.id)} for row in installations],
+            "policy_errors": [row.error for row in policies if row.error],
         }
 
 
@@ -657,48 +666,132 @@ async def github_app(services: Application) -> GitHubApp:
     async with services.sessions() as db:
         app = await db.get(GitHubApp, 1)
         if app is None:
-            raise ValueError("Configure a GitHub App first")
+            raise ValueError("Connect GitHub first")
         return app
 
 
-@router.put(API + "/integrations/github")
-@provider_change
-async def configure_github(request: Request, body: GitHubConfig) -> Any:
+@router.post(API + "/integrations/github/connect")
+async def connect_github(request: Request) -> Response:
     services = current(request)
     await no_active(services)
-    ref = f"github-key-{uuid4().hex}"
-    try:
-        await services.credentials.put(ref, body.private_key.get_secret_value().encode())
-        info = await services.github.inspect_app(body.app_id, ref)
-        async with services.sessions.begin() as db:
-            old = await db.get(GitHubApp, 1)
-            old_ref = old.credential_ref if old else None
-            changed_app = old is not None and old.app_id != body.app_id
-            if old:
-                old.app_id, old.slug, old.credential_ref = body.app_id, info["slug"], ref
-            else:
-                db.add(GitHubApp(id=1, app_id=body.app_id, slug=info["slug"], credential_ref=ref))
-            await db.execute(delete(GitHubInstallation))
-            # Grants must be reselected for a different App, but survive key rotation.
-            if changed_app:
-                await db.execute(delete(ProjectGitHub))
-    except BaseException:
-        # Cancellation during commit has an uncertain result. Never remove a key
-        # that SQLite already references; an encrypted orphan is safe to retain.
+    state, browser = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    manifest = app_manifest(services.settings.public_url, "tokendrain-" + uuid4().hex[:8])
+    async with services.sessions.begin() as db:
+        await db.execute(text("BEGIN IMMEDIATE"))
+        previous = await db.get(Setting, "github_manifest")
+        if previous:
+            await db.delete(previous)
+            await db.flush()
+        db.add(
+            Setting(
+                key="github_manifest",
+                value={
+                    "state_hash": hashlib.sha256(state.encode()).hexdigest(),
+                    "browser_hash": hashlib.sha256(browser.encode()).hexdigest(),
+                    "expires_at": time.time() + 600,
+                },
+            )
+        )
+    response = JSONResponse(
+        {
+            "manifest": manifest,
+            "action": "https://github.com/settings/apps/new?state=" + state,
+            "state": state,
+        }
+    )
+    response.set_cookie(
+        "tokendrain_github_manifest",
+        browser,
+        httponly=True,
+        samesite="lax",
+        secure=services.settings.public_url.startswith("https://"),
+        max_age=600,
+        path=API + "/integrations/github",
+    )
+    return response
+
+
+@router.get(API + "/integrations/github/callback")
+async def github_callback(request: Request, code: str = "", state: str = "") -> Response:
+    services = current(request)
+    browser = request.cookies.get("tokendrain_github_manifest", "")
+    async with services.sessions.begin() as db:
+        await db.execute(text("BEGIN IMMEDIATE"))
+        pending = await db.get(Setting, "github_manifest")
+        if (
+            not code
+            or len(code) > 200
+            or not state
+            or not browser
+            or pending is None
+            or pending.value["expires_at"] <= time.time()
+            or not secrets.compare_digest(
+                pending.value["state_hash"], hashlib.sha256(state.encode()).hexdigest()
+            )
+            or not secrets.compare_digest(
+                pending.value["browser_hash"], hashlib.sha256(browser.encode()).hexdigest()
+            )
+        ):
+            raise HTTPException(
+                400, "GitHub connection expired or could not be verified. Connect GitHub again."
+            )
+        # Consume before exchange, including failures and concurrent callback replays.
+        await db.delete(pending)
+    async with services.runs.credentials_change():
+        info = await services.github.convert_manifest(code)
+        ref = f"github-key-{uuid4().hex}"
+        await services.credentials.put(ref, str(info["pem"]).encode())
         try:
+            # Old App authority is still available here. Never orphan its managed rules.
+            await reconcile_all(services.sessions, services.github, remove_owned=True)
+            async with services.sessions.begin() as db:
+                old = await db.get(GitHubApp, 1)
+                old_ref = old.credential_ref if old else None
+                if old:
+                    old.app_id, old.slug, old.credential_ref = str(info["id"]), info["slug"], ref
+                else:
+                    db.add(
+                        GitHubApp(
+                            id=1, app_id=str(info["id"]), slug=info["slug"], credential_ref=ref
+                        )
+                    )
+                await db.execute(delete(GitHubInstallation))
+                await db.execute(delete(Setting).where(Setting.key == "github_repositories"))
+        except BaseException:
             async with services.sessions() as db:
                 saved = await db.get(GitHubApp, 1)
                 referenced = saved is not None and saved.credential_ref == ref
             if not referenced:
                 await services.credentials.delete(ref)
-        except Exception:
-            pass
-        raise
-    if old_ref:
-        await services.credentials.delete(old_ref)
+            raise
+        if old_ref:
+            await services.credentials.delete(old_ref)
+        services.github.clear_cache()
+    # OAuth/client/webhook secrets intentionally discarded; only the PEM is encrypted.
+    response = RedirectResponse(
+        f"https://github.com/apps/{info['slug']}/installations/new", status_code=303
+    )
+    response.delete_cookie("tokendrain_github_manifest", path=API + "/integrations/github")
+    return response
+
+
+@router.delete(API + "/integrations/github", status_code=204)
+@provider_change
+async def disconnect_github(request: Request) -> Response:
+    services = current(request)
+    app = await github_app(services)
+    await reconcile_all(services.sessions, services.github, remove_owned=True)
+    async with services.sessions.begin() as db:
+        await db.execute(delete(ProjectGitHub))
+        await db.execute(delete(GitHubInstallation))
+        await db.execute(delete(GitHubApp))
+        await db.execute(
+            delete(Setting).where(Setting.key.in_(["github_repositories", "github_manifest"]))
+        )
+    await services.credentials.delete(app.credential_ref)
     services.github.clear_cache()
-    await sync_github(request)
-    return await github_status(request)
+    await services.events.publish("github.disconnected")
+    return Response(status_code=204)
 
 
 @router.post(API + "/integrations/github/sync")
@@ -707,28 +800,73 @@ async def sync_github(request: Request) -> Any:
     services = current(request)
     app = await github_app(services)
     values = await services.github.installations(app.app_id, app.credential_ref)
+    inventory: list[dict[str, Any]] = []
+    for installation in values:
+        repos = await services.github.repositories(
+            app.app_id, app.credential_ref, installation["id"]
+        )
+        inventory.extend({**repo, "installation_id": installation["id"]} for repo in repos)
     async with services.sessions.begin() as db:
+        await db.execute(text("BEGIN IMMEDIATE"))
         await db.execute(delete(GitHubInstallation))
         db.add_all([GitHubInstallation(**value) for value in values])
+        setting = await db.get(Setting, "github_repositories")
+        if setting:
+            setting.value = {"repositories": inventory}
+        else:
+            db.add(Setting(key="github_repositories", value={"repositories": inventory}))
+        bindings = (await db.scalars(select(ProjectGitHub))).all()
+        for binding in bindings:
+            repo = next((repo for repo in inventory if repo["id"] == binding.repository_id), None)
+            if repo:
+                binding.installation_id, binding.repository_name = (
+                    repo["installation_id"],
+                    repo["full_name"],
+                )
+                await reserve_pr_policy(db, binding)
+    services.github.clear_cache()
+    try:
+        await reconcile_all(services.sessions, services.github)
+    except ValueError:
+        # Persisted policy errors are visible in settings and repository selection.
+        pass
     await services.events.publish("github.synced")
     return await github_status(request)
 
 
 @router.get(API + "/integrations/github/setup")
 async def github_setup(request: Request) -> Response:
-    # Public redirect only: Strict cookies are absent on a cross-site GitHub return.
-    # The authenticated settings page performs a CSRF-protected authoritative sync.
+    # Query parameters are hints only. Strict session cookies are absent on this return.
+    # The authenticated Settings page automatically POSTs the authoritative API sync.
     return RedirectResponse("/settings?github=installed", status_code=303)
 
 
-@router.get(API + "/integrations/github/installations/{installation_id}/repositories")
-async def repositories(request: Request, installation_id: int) -> Any:
+@router.get(API + "/integrations/github/repositories")
+async def repositories(request: Request, exclude_project: str | None = None) -> Any:
     services = current(request)
-    app = await github_app(services)
     async with services.sessions() as db:
-        if not await db.get(GitHubInstallation, installation_id):
-            raise LookupError("Installation not found; sync GitHub first")
-    return await services.github.repositories(app.app_id, app.credential_ref, installation_id)
+        inventory = await db.get(Setting, "github_repositories")
+        bindings = (await db.execute(select(ProjectGitHub, Project).join(Project))).all()
+        policies = {
+            row.repository_id: row for row in (await db.scalars(select(GitHubPolicy))).all()
+        }
+        output = []
+        for repo in inventory.value["repositories"] if inventory else []:
+            uses = [
+                {
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "access_mode": binding.access_mode,
+                }
+                for binding, project in bindings
+                if binding.repository_id == repo["id"] and project.id != exclude_project
+            ]
+            policy = policies.get(repo["id"])
+            output.append(
+                {key: value for key, value in repo.items() if key != "installation_id"}
+                | {"used_by": uses, "policy_error": policy.error if policy else None}
+            )
+        return output
 
 
 @router.get(API + "/projects/{project_id}/github")
@@ -737,25 +875,68 @@ async def project_github(request: Request, project_id: str) -> Any:
     await services.projects.get(project_id)
     async with services.sessions() as db:
         row = await db.get(ProjectGitHub, project_id)
-        return {**columns(row), "installation_id": str(row.installation_id)} if row else None
+        policy = await db.get(GitHubPolicy, row.repository_id) if row else None
+        return (
+            {
+                key: getattr(row, key)
+                for key in ("repository_id", "repository_name", "access_mode", "allow_workflows")
+            }
+            | {"policy_error": policy.error if policy else None}
+            if row
+            else None
+        )
 
 
-async def validate_github_repository(request: Request, body: IntegrationInput) -> None:
-    repos = await repositories(request, body.installation_id)
-    repository = next((repo for repo in repos if repo["id"] == body.repository_id), None)
-    if repository is None or repository["full_name"] != body.repository_name:
-        raise ValueError("Repository is not available to this installation")
+async def resolve_github_repository(request: Request, body: RepositoryInput) -> IntegrationInput:
+    services = current(request)
+    app = await github_app(services)
+    async with services.sessions() as db:
+        inventory = await db.get(Setting, "github_repositories")
+        repo = (
+            next(
+                (
+                    repo
+                    for repo in inventory.value["repositories"]
+                    if repo["id"] == body.repository_id
+                ),
+                None,
+            )
+            if inventory
+            else None
+        )
+    if repo is None:
+        raise ValueError("Repository is not available. Manage repositories on GitHub and retry.")
+    # Verify cached selection using authenticated App API before saving the binding.
+    available = await services.github.repositories(
+        app.app_id, app.credential_ref, repo["installation_id"]
+    )
+    verified = next((item for item in available if item["id"] == body.repository_id), None)
+    if verified is None:
+        raise ValueError("Repository access changed. Refresh repositories and retry.")
+    return IntegrationInput(
+        **body.model_dump(),
+        installation_id=repo["installation_id"],
+        repository_name=verified["full_name"],
+    )
+
+
+async def reconcile_saved(services: Application) -> None:
+    # Configuration is desired state. A GitHub outage cannot roll it back or grant writes.
+    try:
+        await reconcile_all(services.sessions, services.github)
+    except ValueError:
+        pass
 
 
 @router.put(API + "/projects/{project_id}/github")
-async def attach_github(request: Request, project_id: str, body: IntegrationInput) -> Any:
+async def attach_github(request: Request, project_id: str, body: RepositoryInput) -> Any:
     services = current(request)
     await services.projects.require_idle(project_id)
     app_revision = await github_app(services)
-    await validate_github_repository(request, body)
+    binding = await resolve_github_repository(request, body)
     async with services.sessions.begin() as db:
         await db.execute(text("BEGIN IMMEDIATE"))
-        await validate_github_access(db, body, app_revision.credential_ref)
+        await validate_github_access(db, binding, app_revision.credential_ref, project_id)
         if not await db.get(Project, project_id):
             raise LookupError("Project not found")
         active = await db.scalar(
@@ -770,10 +951,12 @@ async def attach_github(request: Request, project_id: str, body: IntegrationInpu
             raise ValueError("Project has an active or queued execution")
         row = await db.get(ProjectGitHub, project_id)
         if row:
-            for key, value in body.model_dump().items():
+            for key, value in binding.binding().items():
                 setattr(row, key, value)
         else:
-            db.add(ProjectGitHub(project_id=project_id, **body.model_dump()))
+            db.add(ProjectGitHub(project_id=project_id, **binding.binding()))
+        await reserve_pr_policy(db, binding)
+    await reconcile_saved(services)
     await services.events.publish("project.github_updated", project_id=project_id)
     return await project_github(request, project_id)
 
@@ -795,6 +978,7 @@ async def detach_github(request: Request, project_id: str) -> Response:
         if active:
             raise ValueError("Project has an active or queued execution")
         await db.execute(delete(ProjectGitHub).where(ProjectGitHub.project_id == project_id))
+    await reconcile_saved(services)
     await services.events.publish("project.github_updated", project_id=project_id)
     return Response(status_code=204)
 

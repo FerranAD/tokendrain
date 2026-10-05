@@ -35,7 +35,13 @@ from tokendrain.domain import (
     utcnow,
 )
 from tokendrain.events import EventBus
-from tokendrain.github.provider import GitHubProvider, InstallationToken, IntegrationInput
+from tokendrain.github.policy import reconcile_repository
+from tokendrain.github.provider import (
+    MODE_GUIDANCE,
+    GitHubProvider,
+    InstallationToken,
+    IntegrationInput,
+)
 from tokendrain.orchestration.driver import (
     ProviderLimited,
     ResumeRequired,
@@ -355,7 +361,13 @@ class Supervisor:
                 await asyncio.gather(watcher, work, return_exceptions=True)
 
         async def github_token() -> InstallationToken | None:
+            if integration and app is None:
+                raise ValueError("Connect GitHub before starting this project")
             if integration and app:
+                if integration.access_mode != "read_only":
+                    await reconcile_repository(
+                        self.sessions, self.github, integration.repository_id
+                    )
                 return await self.github.token(
                     app.app_id,
                     app.credential_ref,
@@ -366,7 +378,8 @@ class Supervisor:
                                 "installation_id",
                                 "repository_id",
                                 "repository_name",
-                                "permissions",
+                                "access_mode",
+                                "allow_workflows",
                             )
                         }
                     ),
@@ -393,6 +406,9 @@ class Supervisor:
                     redactor.replace_values(list(runtime_values.values()))
                     if reason := stop_reason(policy, [], elapsed()):
                         raise BudgetReached(reason)
+                    # Fail closed before booting a writable guest. The callback also
+                    # reconciles at credential rotation boundaries.
+                    await github_token()
                     await self.runs.transition(execution_id, ExecutionState.STARTING_VM)
                     start_attempted = True
                     failure_stage = "vm_start"
@@ -767,7 +783,9 @@ class Supervisor:
         if integration:
             context["github"] = {
                 "repository": integration.repository_name,
-                "permissions": integration.permissions,
+                "access_mode": integration.access_mode,
+                "guidance": MODE_GUIDANCE[integration.access_mode],
+                "allow_workflow_changes": integration.allow_workflows,
             }
         return (
             "You are the autonomous worker for a persistent software project. You have root "

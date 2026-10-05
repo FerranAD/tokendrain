@@ -33,7 +33,8 @@ CPU, guest memory, process count, concurrency, and disk capacities are bounded. 
 | Imported Codex master `auth.json` | Encrypted host credential store; temporarily interpreted under host `/run` | No |
 | Current OpenAI access token | Host credential record and transient guest runtime | Yes, only current runtime credential |
 | GitHub App private key | Encrypted host credential store | No |
-| Scoped GitHub installation token | Short-lived host memory and guest runtime | Yes, selected repository/capabilities |
+| Host repository policy token (Administration write) | Short-lived host memory only | No |
+| Scoped guest GitHub installation token | Short-lived host memory and guest runtime | Yes, selected repository/capabilities |
 | Generic project secrets | Encrypted host credential store | Yes, assigned project's runtime environment |
 | Project files, tasks, descriptions, reports and logs | Project disks and/or SQLite | Project context and files as needed |
 
@@ -51,7 +52,7 @@ Guestd injects values through child-process environment variables and files unde
 
 Known values are redacted from application execution logs where possible. Literal matching cannot remove every encoded, transformed, fragmented, or previously unknown secret. Firecracker console output is untrusted and may appear in the system journal without application redaction. Restrict journal readers, backup access, and retention.
 
-Git credentials use a runtime helper restricted to HTTPS `github.com`; tokens are not placed in repository URLs. The GitHub App private key remains on the host. Provider-side repository permissions, branch rules, and installation scope still apply. See [GitHub setup](github-app.md).
+Git credentials use a runtime helper restricted to HTTPS `github.com`; tokens are not placed in repository URLs. The GitHub App private key, App JWT and repository Administration policy tokens remain on the host. A distinct VM token is narrowed to one repository and never includes Administration. Pull requests mode is enforced by tokendrain’s shared GitHub ruleset; the App is never a bypass actor. Provider-side repository permissions, branch rules, and installation scope still apply. See [GitHub setup](github-app.md).
 
 ## Web access
 
@@ -61,7 +62,7 @@ In token mode, the administrator supplies `auth.adminTokenFile` as a runtime str
 
 Auth-none mode omits login and session authentication; use external access control such as a VPN or authenticated reverse proxy. Both modes retain Host/Origin checks and the required mutation request header. Workspace Markdown is sanitized before rendering; agent reports and logs are displayed as text.
 
-Codex credentials are imported from `auth.json`; there is no provider login callback. GitHub's setup callback only redirects to Settings and trusts no installation query parameters. An authenticated, origin-checked refresh discovers installations using the configured App credentials. See [Codex authentication](openai-auth.md) and [GitHub setup](github-app.md).
+Codex credentials are imported from `auth.json`; there is no provider login callback. GitHub registration uses a browser-mediated return with a ten-minute, single-use random state and a separate browser cookie. The host consumes state before exchanging the registration code; callback replays fail. GitHub’s installation setup callback redirects to Settings and trusts no installation query parameters. Settings automatically makes an authenticated, origin-checked discovery request using the configured App credentials. See [Codex authentication](openai-auth.md) and [GitHub setup](github-app.md).
 
 ## Recovery and backups
 

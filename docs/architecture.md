@@ -105,7 +105,7 @@ The host owns long-lived OpenAI and GitHub credentials. Guests receive current O
 
 Per-account locks serialize OpenAI refresh. Rotation normally occurs at a turn boundary. When expiry requires interruption, the host waits for the terminal event, restarts and initializes Codex, and resumes the thread. The next request inspects existing work instead of replaying the interrupted action.
 
-The GitHub provider centralizes and serializes token issuance for scoped project bindings. Guestd updates runtime Git credentials and process environment on rotation. Secret values enter the runtime environment; prompts contain their names and intended uses.
+GitHub project bindings store one of three access modes. Serialized SQLite binding mutations reject incompatible writable modes for the same repository ID. The host reconciles a shared, tracked PR-only ruleset and verifies protection before starting writable guests. Separate administration tokens are used only for host policy operations. The GitHub provider centralizes and serializes narrowed guest token issuance for scoped project bindings. Guestd updates runtime Git credentials and process environment on rotation. Secret values enter the runtime environment; prompts contain their names and intended uses.
 
 Replacing or disconnecting the OpenAI account, changing the GitHub App, and refreshing GitHub installation discovery require every execution to be terminal, including queued executions. A durable credential-change reservation prevents new runs from starting while those operations are in progress. This gate does not block automatic runtime token refresh. Changing one project's repository binding requires that project to be idle.
 

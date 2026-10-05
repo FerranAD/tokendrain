@@ -70,6 +70,8 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
         current = { ...current, ...body };
         return route.fulfill({ json: current });
       }
+      if (path.endsWith('/github'))
+        return route.fulfill({ json: { ...body, repository_name: 'octocat/telescope' } });
       if (path === '/runs') return route.fulfill({ json: { id: 'run-1234', ...body } });
       if (path === '/schedules') return route.fulfill({ json: { id: 'schedule-new', ...body } });
       return route.fulfill({ json: { ok: true } });
@@ -103,25 +105,13 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
       ],
       '/integrations/github': {
         configured: true,
-        app_id: '42',
-        app_slug: 'tokendrain-example',
-        installations: [
-          {
-            id: '123',
-            account: 'octocat',
-            permissions: {
-              contents: 'write',
-              pull_requests: 'write',
-              issues: 'read',
-              actions: 'write',
-              workflows: 'write',
-            },
-          },
-        ],
+        name: 'tokendrain-example',
+        repository_count: 1,
+        installation_url: 'https://github.com/apps/tokendrain-example/installations/new',
       },
       '/projects/project-a/github': null,
-      '/integrations/github/installations/123/repositories': [
-        { id: 55, full_name: 'octocat/telescope' },
+      '/integrations/github/repositories': [
+        { id: 55, full_name: 'octocat/telescope', used_by: [] },
       ],
       '/projects/project-a/secrets': [],
       '/runs/run-1234': {
@@ -246,67 +236,51 @@ test('task edits and described dotenv import reach separate project APIs', async
   expect(errors).toEqual([]);
 });
 
-test('GitHub repository access narrows installation permissions', async ({ page }) => {
+test('GitHub access modes and workflow toggle save a simple repository binding', async ({
+  page,
+}) => {
   const { writes, errors } = await fixture(page);
   await page.goto('/projects/project-a');
   await page.getByRole('button', { name: 'GitHub', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Installation', exact: true }).selectOption('123');
   await page.getByRole('combobox', { name: 'Repository', exact: true }).fill('octocat/telescope');
-  await page
-    .getByRole('combobox', { name: 'Repository contents', exact: true })
-    .selectOption('write');
-  await page.getByRole('combobox', { name: 'Pull requests', exact: true }).selectOption('write');
-  await page.getByRole('combobox', { name: 'GitHub Actions', exact: true }).selectOption('write');
-  await page.getByRole('combobox', { name: 'Workflow files', exact: true }).selectOption('write');
-  expect(
-    await page
-      .getByRole('combobox', { name: 'Issues', exact: true })
-      .locator('option')
-      .allTextContents(),
-  ).toEqual(['No access', 'Read']);
+  await expect(page.getByRole('radio', { name: 'Pull requests', exact: true })).toBeChecked();
+  await page.getByRole('checkbox', { name: 'Allow workflow file changes' }).check();
   await page.getByRole('button', { name: 'Save repository access' }).click();
   await expect(page.getByRole('status')).toContainText('Repository integration saved');
   expect(writes.find((write) => write.path.endsWith('/github'))?.body).toEqual({
-    installation_id: '123',
     repository_id: 55,
-    repository_name: 'octocat/telescope',
-    permissions: {
-      contents: 'write',
-      pull_requests: 'write',
-      actions: 'write',
-      workflows: 'write',
-    },
+    access_mode: 'pull_requests',
+    allow_workflows: true,
   });
+  await expect(page.getByLabel('Installation', { exact: true })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
-test('GitHub write permissions are hidden unless the installation grants them', async ({
+test('GitHub repository conflicts disable only the incompatible writable mode', async ({
   page,
 }) => {
   await fixture(page);
-  await page.route('**/api/v1/integrations/github', (route) =>
+  await page.route('**/api/v1/integrations/github/repositories*', (route) =>
     route.fulfill({
-      json: {
-        configured: true,
-        installations: [{ id: '123', account: 'octocat', permissions: { actions: 'read' } }],
-      },
+      json: [
+        {
+          id: 55,
+          full_name: 'octocat/telescope',
+          used_by: [
+            { project_id: 'other', project_name: 'Project B', access_mode: 'pull_requests' },
+          ],
+        },
+      ],
     }),
   );
   await page.goto('/projects/project-a');
   await page.getByRole('button', { name: 'GitHub', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Installation', exact: true }).selectOption('123');
-  expect(
-    await page
-      .getByRole('combobox', { name: 'GitHub Actions', exact: true })
-      .locator('option')
-      .allTextContents(),
-  ).toEqual(['No access', 'Read']);
-  expect(
-    await page
-      .getByRole('combobox', { name: 'Workflow files', exact: true })
-      .locator('option')
-      .allTextContents(),
-  ).toEqual(['No access']);
+  await page.getByRole('combobox', { name: 'Repository', exact: true }).fill('octocat/telescope');
+  await expect(page.getByText('Used by Project B · Pull requests')).toBeVisible();
+  await expect(page.getByRole('radio', { name: 'Direct write', exact: true })).toBeDisabled();
+  await expect(page.getByRole('radio', { name: 'Pull requests', exact: true })).toBeEnabled();
+  await page.getByRole('radio', { name: 'Read only', exact: true }).check();
+  await expect(page.getByRole('checkbox', { name: 'Allow workflow file changes' })).toBeDisabled();
 });
 
 test('schedules use the ordinary run template with timezone-aware timing', async ({ page }) => {
@@ -410,9 +384,9 @@ test('GitHub setup return requires authenticated discovery instead of trusting q
 }) => {
   const { writes, errors } = await fixture(page);
   await page.goto('/settings?github=installed');
-  await expect(page.getByText('Continue your GitHub setup', { exact: true })).toBeVisible();
-  expect(writes).toEqual([]);
-  await page.getByRole('button', { name: 'Discover installed repositories' }).click();
+  await expect(
+    page.getByText('Repositories updated. Choose a repository in your project.'),
+  ).toBeVisible();
   await expect(page).toHaveURL(/\/settings$/);
   expect(writes).toEqual([{ path: '/integrations/github/sync', method: 'POST', body: {} }]);
   expect(errors).toEqual([]);
@@ -696,10 +670,7 @@ test('project creation saves the model and GitHub integration together', async (
   await page.getByLabel('Default model', { exact: true }).selectOption('codex-other');
   await page.getByLabel('Default reasoning effort', { exact: true }).selectOption('high');
   await page.getByRole('checkbox', { name: 'Attach a GitHub repository' }).check();
-  await page.getByLabel('Installation', { exact: true }).selectOption('123');
   await page.getByRole('combobox', { name: 'Repository', exact: true }).fill('octocat/telescope');
-  await page.getByLabel('Repository contents', { exact: true }).selectOption('write');
-  await page.getByLabel('Pull requests', { exact: true }).selectOption('write');
   await page.screenshot({ path: 'test-results/create-project.png', fullPage: true });
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
   await expect(page).toHaveURL(/projects\/new-project$/);
@@ -707,10 +678,9 @@ test('project creation saves the model and GitHub integration together', async (
     default_model: 'codex-other',
     default_reasoning_effort: 'high',
     github: {
-      installation_id: '123',
       repository_id: 55,
-      repository_name: 'octocat/telescope',
-      permissions: { contents: 'write', pull_requests: 'write' },
+      access_mode: 'pull_requests',
+      allow_workflows: false,
     },
   });
 });
@@ -747,16 +717,7 @@ test('Run preparation has no unsaved warning and dark controls show selection', 
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect(page).toHaveURL(/settings$/);
   expect(warned).toBe(false);
-  await page.getByText('Set up a self-hosted GitHub App', { exact: true }).click();
-  const guideColor = await page.locator('.setup-guide').evaluate((guide) => {
-    const probe = document.createElement('div');
-    probe.style.backgroundColor = 'var(--field)';
-    guide.appendChild(probe);
-    const expected = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    return { actual: getComputedStyle(guide).backgroundColor, expected };
-  });
-  expect(guideColor.actual).toBe(guideColor.expected);
+  await expect(page.getByRole('link', { name: 'Manage repositories on GitHub ↗' })).toBeVisible();
   await page.screenshot({
     path: 'test-results/settings-dark.png',
     fullPage: true,

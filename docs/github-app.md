@@ -1,92 +1,50 @@
-# Connect your own GitHub App
+# Connect GitHub
 
-Tokendrain uses an App you register and control. You choose which account or organization installs it, which repositories that installation exposes, and the smaller set of capabilities assigned to each project. Ordinary personal access tokens are not required.
+1. Open **Settings → GitHub → Connect GitHub**.
+2. Confirm the suggested App name on GitHub, or choose your own name.
+3. Choose the accounts and repositories where GitHub should install the App.
+4. Back in tokendrain, choose a repository for a project and select **Read only**, **Pull requests**, or **Direct write**.
 
-The App private key stays encrypted on the host. Only short-lived installation tokens enter project VMs. This first integration targets `github.com` and one selected repository per project.
+Tokendrain handles registration, encrypted credentials, repository discovery and permission narrowing. No private key uploads, personal access tokens, user OAuth authorization or webhooks are needed. An organization’s policy may require an organization owner to approve or install an App requesting repository administration access.
 
-## 1. Register the App
+## Choose how the AI may write
 
-In your personal or organization developer settings, open **GitHub Apps** and create an App with a unique name. The [official registration guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) describes the current form.
-
-Use these tokendrain-specific settings:
-
-| Field | Value |
+| Access | What the autonomous VM can do |
 | --- | --- |
-| Homepage | Your browser-facing tokendrain URL, or your project's public homepage |
-| Setup URL | `<tokendrain-origin>/api/v1/integrations/github/setup` |
-| OAuth callback | Unused by this integration |
-| Request user authorization during installation | Off |
-| Device flow | Off |
-| Webhooks | Disable the Active checkbox; no webhook endpoint is required |
-| Installation availability | Your account only, or other accounts if you intend to install into an organization |
+| Read only | Inspect, clone and fetch the repository; cannot publish changes. |
+| Pull requests | Push feature branches and open/update PRs. GitHub requires a PR to update the default branch. This is the default writable mode. |
+| Direct write | Publish directly to the default branch when appropriate, or use PRs. Existing repository rules still apply. |
 
-For a local/tunneled deployment, the setup address can be `http://127.0.0.1:8742/api/v1/integrations/github/setup`; open the tunnel on the computer whose browser performs installation. For a reverse proxy, use its configured HTTPS origin. The Setup URL is a browser return destination, not a server-to-server webhook.
+Enable **Allow workflow file changes** only when the project needs to publish GitHub Actions workflow edits. It is unavailable in Read only mode.
 
-Tokendrain authenticates as the App installation. It does not request a GitHub user access token or attribute its API activity to an OAuth-authorized human. GitHub distinguishes the installation setup return from the OAuth authorization callback. [Setup URL behavior](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url).
+Pull requests mode is enforced by GitHub. Tokendrain manages one shared `tokendrain: PR-only` ruleset per repository, targeting its current default branch regardless of its name. It requires pull requests, blocks force pushes and protects the default branch from deletion. Tokendrain requires zero approving reviews; your own rules can impose stronger requirements.
 
-Pause schedules and finish or cancel all queued and active runs before configuring the App, rotating its key, or refreshing installations. These host-wide operations reserve provider configuration against new runs until they finish. Automatic short-lived token renewal during a run is unaffected.
+Human repository administrators can bypass tokendrain’s rule and push directly. The tokendrain App has no bypass entry. Tokendrain does not edit or remove your own rulesets or branch protections.
 
-## 2. Choose maximum repository permissions
+Projects sharing a repository can all use Pull requests, or all use Direct write. Those two writable modes cannot coexist for the same repository. Read only projects are compatible with either. Repository selection shows which other projects use it and disables the incompatible writable mode.
 
-Set only the App permissions you expect to grant projects. Typical choices are:
+Tokendrain keeps protection while any project needs Pull requests. After the last such project changes access, disconnects or is deleted, it removes its own rule. If GitHub is unavailable, protection may remain until reconciliation succeeds. Writable Runs verify policy again before starting and at credential rotation boundaries; failure never silently grants Direct write.
 
-| Capability in tokendrain | App permission | Project choices | Enables |
-| --- | --- | --- | --- |
-| Repository contents | Contents | No access / read / read and write | HTTPS clone/fetch; write adds branch/commit/push operations |
-| Pull requests | Pull requests | No access / read / read and write | Inspect or create/update pull requests |
-| Issues | Issues | No access / read / read and write | Inspect or create/update issues |
-| GitHub Actions | Actions | No access / read / read and write | Inspect runs and logs; write adds dispatch, rerun and cancellation operations |
-| Workflow files | Workflows | No access / write | Publish changes to `.github/workflows` files, together with Contents write access |
+## Private servers and Tailscale
 
-GitHub supplies repository metadata access as part of the installation model. Other permission categories are outside this version's project selector. In particular, tokendrain does not request administration capabilities. GitHub can reject an operation requiring permissions beyond this subset.
+Set `TOKENDRAIN_PUBLIC_URL` (or the NixOS module’s public URL option) to the address your browser uses to reach tokendrain, for example `https://tokendrain.example-tailnet.ts.net`. This configured address supplies GitHub’s return URLs. Tokendrain never builds them from a request’s Host header.
 
-After changing App permissions, approve the change for the installation in GitHub, then refresh installations in tokendrain Settings. Actions write access manages workflow runs; editing `.github/workflows` files requires the separate Workflows permission, available as Workflow files in the project selector.
+Your browser travels from tokendrain to GitHub and back to that private URL. GitHub needs no inbound network access to your machine. Tokendrain needs outbound HTTPS to GitHub’s API; webhook delivery is disabled.
 
-These App permissions are a ceiling, not an instruction to grant every project all of them. A read-only investigation can receive only `contents:read`; a coding project may need `contents:write` and `pull_requests:write`. Repository branch rules, organization policy, and installation approval still apply.
+## Host and VM authority
 
-## 3. Save the App credentials in tokendrain
+The App requests a permission ceiling that supports all three modes. Tokendrain’s trusted host temporarily uses repository administration authority only to manage its PR-only protection. Autonomous VMs **never receive repository Administration permission**.
 
-After registering the App:
+App private keys stay encrypted on the host. App JWTs and policy tokens stay on the host. Each VM receives a distinct, short-lived token narrowed to its one repository and access mode. Tokens are injected only at runtime, rotated at safe boundaries, and stored by guestd in tmpfs credential files. The Git credential helper keeps tokens out of clone URLs; GitHub CLI receives `GH_TOKEN` and `GITHUB_TOKEN`. See [security](security.md) for storage and redaction limits.
 
-1. Record its **App ID** and URL slug, such as `my-tokendrain` from `github.com/apps/my-tokendrain`. The App ID is distinct from an OAuth client ID.
-2. Generate a private key in the App's settings and keep the downloaded PEM private.
-3. Open **tokendrain Settings → Your GitHub App**, enter the App ID and slug, and upload or paste the PEM.
-4. Save the configuration. Tokendrain validates the App through GitHub using the supplied key, then encrypts the private key in its host credential store.
+## Recovery
 
-Do not add the PEM contents to your Nix configuration, project workspace, `.env` bundle, or a Git repository. This App key can mint tokens for its installations; it belongs to the trusted host.
+Settings shows the connection name and repository count. **Manage repositories on GitHub** changes the installation selection; returning automatically refreshes available repositories.
 
-## 4. Install and discover repositories
+Under **Advanced**, **Refresh repositories** retries discovery and policy reconciliation, **Reconnect GitHub** repeats registration, and **Disconnect GitHub** removes tokendrain’s rules and repository bindings before deleting host credentials. Reconnection creates a new App registration, preserves repository/access choices and discovers their new installations after you install it. The old App registration can be removed on GitHub after the new connection works.
 
-Use **Install app** in tokendrain or the installation page for your App. Choose the personal account/organization and select the repositories it should expose. If an organization requires approval, complete that process before expecting repository discovery to succeed.
+If GitHub rejects PR-only protection, tokendrain shows the actionable reason and blocks writable Runs in that mode. GitHub rulesets are available for public repositories on Free plans and for private repositories on Pro, Team or Enterprise Cloud. Read only remains available; Direct write requires an explicit choice. Organization restrictions may also prevent enforcement. [GitHub ruleset availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets).
 
-After GitHub returns to tokendrain, sign in to the administration UI if necessary and choose **Discover installed repositories**. You can also use **Refresh installations** in Settings at any time. Then open a project's **GitHub** tab, choose the installation and repository, select capabilities, and save.
+If a tracked rule was renamed, or a rule with tokendrain’s name exists without a tracked ID, tokendrain stops policy reconciliation rather than taking ownership of an unknown rule. Inspect the repository’s rules on GitHub and resolve that ambiguity before retrying.
 
-The public setup endpoint only redirects to Settings. It never trusts `installation_id` or other query values and performs no credential or installation mutation. The subsequent authenticated refresh enumerates installations using the configured App's own authority. GitHub explicitly warns that setup query parameters are forgeable; this single-owner application does not use them to link identities or grant repository access. [GitHub setup security](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url).
-
-If the browser return cannot reach your private host, installation still exists on GitHub. Reopen tokendrain through your normal tunnel and refresh installations manually. You do not need to make a private host Internet-accessible for this integration.
-
-## 5. Let a project work
-
-Describe the desired repository work in the project's goal or next-run feedback. Give contents write permission when pushes are intended and pull-request write permission when the agent should create/update PRs. Start a run normally.
-
-The agent receives the repository identity and allowed capabilities in its context. Git uses a runtime credential helper restricted to HTTPS `github.com`; the guest also has `gh`, with `GH_TOKEN` and `GITHUB_TOKEN` provided for its execution. Tokens are kept out of clone URLs and normal persistent credential files. The agent remains responsible for inspecting an existing workspace before cloning or modifying it.
-
-The host signs short-lived App JWTs and requests an installation token containing the selected `repository_ids` and explicit `permissions`. It uses the returned expiry, caches tokens only within their usable interval, and re-mints before expiry. Guest rotation updates credentials at a safe turn boundary; long executions do not require manually supplied replacement tokens. GitHub supports narrowing these fields and returns the token's expiry. [Installation token API](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app).
-
-The user-granted project permissions authorize autonomous work. There is no additional push, PR, or command approval dialog. Review the scope before starting a run.
-
-## Changes, revocation, and troubleshooting
-
-- **No installation appears:** verify the configured App ID/key, complete installation approval, and refresh. An App registration and its installation are separate objects.
-- **A repository is missing:** check the installation's selected repositories on GitHub, then refresh and reselect it in the project.
-- **Token issuance returns 403/422:** the requested subset may exceed the installation's current permissions or repository access. Accept any pending App permission change on GitHub, or narrow the project settings.
-- **Push or PR fails:** inspect execution events, repository branch rules, required checks, and the selected capability. A token does not bypass repository policy.
-- **Permissions change while a run is active:** stop the run, update the project binding, and start another execution. A binding cannot be changed while that project has a queued or active execution. Refreshing installation permissions first requires all projects to be idle.
-- **Key rotation:** generate a new App PEM, reconfigure tokendrain, verify discovery, and remove the retired key in GitHub. The new key remains host-only.
-- **Compromised access:** revoke the installation or credentials at GitHub. Disconnecting the project stops future injection but cannot erase copies already made by arbitrary guest software.
-
-See [security](security.md) for storage/redaction limits and [OpenAI authentication](openai-auth.md) for the independent model-account connection. The implementation follows GitHub's documented API and treats token strings as opaque; it does not assume a fixed installation-token length.
-
-## Publishing contributions
-
-For a project that should publish a branch and open a PR, grant **Contents: write** and **Pull requests: write** on its selected target repository. PR write alone cannot publish the source branch. The project form warns about this combination before saving. Repository selection is searchable. Provider branch rules and installation permissions still apply.
+Existing integrations created with the older raw-permission UI migrate to Read only. Choose a writable mode explicitly to enable publishing again.

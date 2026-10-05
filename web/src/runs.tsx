@@ -193,12 +193,8 @@ function sameWindow(condition: StopCondition, window: UsageWindow) {
 
 function GitHubRunWarning({ id }: { id: string }) {
   const integration = useResource<ProjectGitHub | null>(`/projects/${id}/github`);
-  return integration.data?.permissions.pull_requests === 'write' &&
-    integration.data.permissions.contents !== 'write' ? (
-    <div className="notice warning">
-      This project can create pull requests, but cannot publish the source branch. Give the target
-      repository Contents write access.
-    </div>
+  return integration.data?.policy_error ? (
+    <div className="notice warning">{integration.data.policy_error}</div>
   ) : null;
 }
 

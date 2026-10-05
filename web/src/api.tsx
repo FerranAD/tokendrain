@@ -25,6 +25,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     try {
       const body = (await response.json()) as { detail?: unknown };
       if (typeof body.detail === 'string') message = body.detail;
+      else if (body.detail && typeof body.detail === 'object' && 'message' in body.detail)
+        message = String(body.detail.message);
       else if (Array.isArray(body.detail)) {
         message = body.detail
           .map(

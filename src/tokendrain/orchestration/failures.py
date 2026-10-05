@@ -1,8 +1,18 @@
 """User-facing execution failures; diagnoses never infer an OOM from a lost socket."""
 
+from tokendrain.github.policy import GitHubPolicyError
+
 
 def execution_failure(error: Exception, *, stage: str, memory_mib: int) -> dict[str, str]:
-    if isinstance(error, (ConnectionError, EOFError, TimeoutError)):
+    if isinstance(error, GitHubPolicyError):
+        title = "GitHub repository protection could not be enforced"
+        explanation = str(error)
+        action = (
+            "Check the GitHub reason above and the project’s access mode. "
+            "Refresh repositories in Settings after resolving "
+            "repository policy or plan restrictions."
+        )
+    elif isinstance(error, (ConnectionError, EOFError, TimeoutError)):
         if stage == "guest":
             title = "Connection to the project VM was lost"
             explanation = (

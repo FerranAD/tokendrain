@@ -173,6 +173,18 @@ class ProjectGitHub(Base):
     repository_id: Mapped[int] = mapped_column(Integer)
     repository_name: Mapped[str] = mapped_column(String(300))
     permissions: Mapped[dict[str, str]] = mapped_column(JSON)
+    access_mode: Mapped[str] = mapped_column(String(24), default="read_only")
+    allow_workflows: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class GitHubPolicy(Base):
+    __tablename__ = "github_repository_policies"
+    repository_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    installation_id: Mapped[int] = mapped_column(Integer)
+    repository_name: Mapped[str] = mapped_column(String(300))
+    ruleset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    may_exist: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
 class Setting(Base):

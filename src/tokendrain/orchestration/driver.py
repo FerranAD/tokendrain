@@ -24,6 +24,12 @@ UsageCallback = Callable[[list[UsageWindow]], Awaitable[None]]
 TokenCallback = Callable[[], Awaitable[InstallationToken | None]]
 
 
+def guest_github_secret(credential: InstallationToken) -> str:
+    """Invariant at every guestd credential payload, including rotations/reconnects."""
+    credential.assert_guest_safe()
+    return credential.token.get_secret_value()
+
+
 class SessionAuth(Protocol):
     async def accounts(self) -> list[AccountInfo]: ...
     async def runtime_credentials(
@@ -225,12 +231,12 @@ class RealSessionFactory:
         try:
             gh = await github_token()
             session.github = gh
-            session.add_secret(gh.token.get_secret_value() if gh else "")
+            session.add_secret(guest_github_secret(gh) if gh else "")
             await session.guest.credentials_set(
                 {
                     "openai": runtime.model_dump(),
                     "secrets": secrets,
-                    "github_token": gh.token.get_secret_value() if gh else None,
+                    "github_token": guest_github_secret(gh) if gh else None,
                 }
             )
             await session.guest.request("codex_start")
@@ -326,10 +332,8 @@ class RealSession:
             await self.guest.request("openai_token_rotate", runtime.model_dump())
             self.runtime = runtime
         if github:
-            self.add_secret(github.token.get_secret_value())
-            await self.guest.request(
-                "github_token_rotate", {"token": github.token.get_secret_value()}
-            )
+            self.add_secret(guest_github_secret(github))
+            await self.guest.request("github_token_rotate", {"token": guest_github_secret(github)})
             self.github = github
         if runtime or github:
             await self.codex.initialize()
@@ -353,12 +357,12 @@ class RealSession:
                 runtime = await self.auth.runtime_credentials(self.account_id)
                 github = await self.github_token()
                 self.add_secret(runtime.access_token)
-                self.add_secret(github.token.get_secret_value() if github else "")
+                self.add_secret(guest_github_secret(github) if github else "")
                 await self.guest.credentials_set(
                     {
                         "openai": runtime.model_dump(),
                         "secrets": self.runtime_secrets,
-                        "github_token": github.token.get_secret_value() if github else None,
+                        "github_token": guest_github_secret(github) if github else None,
                     }
                 )
                 await self.guest.request("codex_start")

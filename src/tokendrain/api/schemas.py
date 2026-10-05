@@ -3,11 +3,11 @@ from typing import Any
 from pydantic import Field, SecretStr
 
 from tokendrain.domain import Boundary, ProjectCreate
-from tokendrain.github.provider import IntegrationInput
+from tokendrain.github.provider import RepositoryInput
 
 
 class ProjectCreateInput(ProjectCreate):
-    github: IntegrationInput | None = None
+    github: RepositoryInput | None = None
 
 
 class LoginInput(Boundary):

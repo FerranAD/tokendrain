@@ -37,6 +37,7 @@ from tokendrain.domain import (
     validate_transition,
 )
 from tokendrain.events import EventBus
+from tokendrain.github.policy import reserve_pr_policy
 from tokendrain.github.provider import IntegrationInput
 from tokendrain.storage.files import ProjectStorage
 
@@ -46,7 +47,10 @@ def columns(row: Any) -> dict[str, Any]:
 
 
 async def validate_github_access(
-    db: AsyncSession, integration: IntegrationInput, credential_ref: str | None
+    db: AsyncSession,
+    integration: IntegrationInput,
+    credential_ref: str | None,
+    project_id: str | None = None,
 ) -> None:
     app = await db.get(GitHubApp, 1)
     if (
@@ -62,6 +66,47 @@ async def validate_github_access(
         maximum = installation.permissions.get(permission, "none")
         if maximum == "none" or (requested == "write" and maximum != "write"):
             raise ValueError(f"Installation does not grant {permission}:{requested}")
+
+    opposite = {"pull_requests": "direct_write", "direct_write": "pull_requests"}.get(
+        integration.access_mode
+    )
+    if opposite:
+        query = (
+            select(ProjectGitHub, Project)
+            .join(Project)
+            .where(
+                ProjectGitHub.repository_id == integration.repository_id,
+                ProjectGitHub.access_mode == opposite,
+            )
+        )
+        if project_id:
+            query = query.where(ProjectGitHub.project_id != project_id)
+        conflict = (await db.execute(query)).first()
+        if conflict:
+            binding, project = conflict
+            raise GitHubModeConflict(
+                {
+                    "conflicting_project_id": project.id,
+                    "conflicting_project_name": project.name,
+                    "repository": integration.repository_name,
+                    "existing_mode": binding.access_mode,
+                    "requested_mode": integration.access_mode,
+                    "message": f"{integration.repository_name} is already used by {project.name} "
+                    "with "
+                    f"{binding.access_mode.replace('_', ' ').capitalize()} access. "
+                    "Pull requests and "
+                    "Direct write cannot coexist for the same repository because "
+                    "PR-only protection "
+                    "applies to the repository as a whole. Use the same writable mode, change the "
+                    "other project’s access, or choose another repository.",
+                }
+            )
+
+
+class GitHubModeConflict(ValueError):
+    def __init__(self, detail: dict[str, Any]) -> None:
+        self.detail = detail
+        super().__init__(detail["message"])
 
 
 async def valid_checkpoint(
@@ -156,7 +201,8 @@ class ProjectService:
                 )
                 await db.flush()
                 if github:
-                    db.add(ProjectGitHub(project_id=project_id, **github.model_dump()))
+                    db.add(ProjectGitHub(project_id=project_id, **github.binding()))
+                    await reserve_pr_policy(db, github)
                 for position, task in enumerate(values.initial_tasks):
                     db.add(
                         ProjectTask(

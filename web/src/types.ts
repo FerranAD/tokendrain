@@ -133,18 +133,14 @@ export interface OpenAIStatus {
   login?: { id: string; url: string; status: string; error?: string };
 }
 
-export interface Installation {
-  id: string;
-  account: string;
-  permissions?: Record<string, string>;
-}
+export type GitHubAccessMode = 'read_only' | 'pull_requests' | 'direct_write';
 
 export interface GitHubStatus {
   configured: boolean;
-  app_id?: string;
-  app_slug?: string;
+  name?: string;
+  repository_count: number;
   installation_url?: string;
-  installations: Installation[];
+  policy_errors?: string[];
 }
 
 export interface Repository {
@@ -152,13 +148,16 @@ export interface Repository {
   full_name: string;
   private?: boolean;
   default_branch?: string;
+  used_by?: { project_id: string; project_name: string; access_mode: GitHubAccessMode }[];
+  policy_error?: string | null;
 }
 
 export interface ProjectGitHub {
-  installation_id: string;
   repository_id: number;
   repository_name: string;
-  permissions: Record<string, string>;
+  access_mode: GitHubAccessMode;
+  allow_workflows: boolean;
+  policy_error?: string | null;
 }
 
 export interface Secret {

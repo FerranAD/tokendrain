@@ -3,7 +3,7 @@ import { NotificationSettings } from './notifications';
 import { Icon } from './icons';
 import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
 import { UnsavedNotice, useUnsavedChanges } from './drafts';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { mutate, useAction, useResource } from './api';
 import type { GitHubStatus, OpenAIStatus, ProjectGitHub, SystemInfo } from './types';
 import { ActionNotice, Badge, ErrorNotice, Loading, PageTitle } from './ui';
@@ -197,224 +197,101 @@ function OpenAISettings() {
 
 function GitHubSettings() {
   const status = useResource<GitHubStatus>('/integrations/github');
-  const [installationReturned, setInstallationReturned] = useState(
-    new URLSearchParams(window.location.search).get('github') === 'installed',
-  );
-  const [appId, setAppId] = useState('');
-  const [slug, setSlug] = useState('');
-  const [key, setKey] = useState('');
-  const [editing, setEditing] = useState(false);
-  const draft = useUnsavedChanges({ appId, slug, key });
   const action = useAction();
-  const origin = window.location.origin;
+  const [syncStarted, setSyncStarted] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('github') === 'installed' && !syncStarted) {
+      setSyncStarted(true);
+      void action.run(async () => {
+        await mutate('/integrations/github/sync', 'POST', {});
+        const url = new URL(window.location.href);
+        url.searchParams.delete('github');
+        window.history.replaceState(null, '', url);
+        status.reload();
+      }, 'Repositories updated. Choose a repository in your project.');
+    }
+  }, [syncStarted]);
+  const connect = () =>
+    action.run(async () => {
+      const setup = await mutate<{ action: string; manifest: unknown; state: string }>(
+        '/integrations/github/connect',
+        'POST',
+        {},
+      );
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = setup.action;
+      for (const [name, value] of Object.entries({
+        manifest: JSON.stringify(setup.manifest),
+        state: setup.state,
+      })) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+    });
   return (
     <section className="panel" id="github">
-      {installationReturned && (
-        <div className="callout">
-          <strong>Continue your GitHub setup</strong>
-          <p>
-            GitHub returned you to tokendrain. Refresh installations to discover repositories
-            authorized for your configured App.
-          </p>
-          <button
-            className="top-space"
-            disabled={action.busy || !status.data?.configured}
-            onClick={() => {
-              void action.run(async () => {
-                await mutate('/integrations/github/sync', 'POST', {});
-                const url = new URL(window.location.href);
-                url.searchParams.delete('github');
-                window.history.replaceState(null, '', url.pathname + url.search);
-                setInstallationReturned(false);
-              }, 'Installations refreshed. Select a repository from your project’s GitHub tab.');
-            }}
-          >
-            Discover installed repositories
-          </button>
-        </div>
-      )}
-      <div className="row between">
-        <div>
-          <h2>GitHub App</h2>
-        </div>
-        <Badge status={status.data?.configured ? 'connected' : 'unconfigured'} />
+      <div className="section-heading">
+        <h2>GitHub</h2>
+        <span>{status.data?.configured ? 'Connected ✓' : 'Not connected'}</span>
       </div>
       <ErrorNotice error={status.error} />
-      <p className="muted">
-        Use a GitHub App you own. Each project receives a short-lived installation token limited to
-        its selected repository and permissions.
-      </p>
-      <details className="setup-guide" open={!status.data?.configured}>
-        <summary>Set up a self-hosted GitHub App</summary>
-        <ol>
-          <li>
-            <a
-              href="https://github.com/settings/apps/new"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Create a GitHub App ↗
-            </a>{' '}
-            in your personal or organization developer settings. Choose a unique name and use{' '}
-            <code>{origin}</code> for its homepage.
-          </li>
-          <li>
-            Set the <strong>Setup URL</strong> to{' '}
-            <code>{origin}/api/v1/integrations/github/setup</code>. User authorization is
-            unnecessary for the installation-token flow. Leave OAuth callback configuration unused,
-            and disable webhooks.
-          </li>
-          <li>
-            Choose repository permissions that set the maximum access you intend to grant. Typical
-            settings are <strong>Contents: read and write</strong>,{' '}
-            <strong>Pull requests: read and write</strong>, <strong>Issues: read and write</strong>,
-            and optionally <strong>Actions: read</strong>. Metadata read access is implicit. Each
-            project can select a narrower subset.
-          </li>
-          <li>
-            Create the app, record its <strong>App ID</strong> and URL slug, and generate a{' '}
-            <strong>private key</strong>. Enter them below. The key stays encrypted on the host and
-            never enters a VM.
-          </li>
-          <li>
-            Install the app onto your account or organization and select repositories. Refresh
-            installations here, then connect a repository from a project’s GitHub tab.
-          </li>
-        </ol>
-      </details>
-      {status.data?.configured && (
-        <div className="inset">
-          <div className="row between wrap">
-            <div>
-              <strong>{status.data.app_slug || `App ${status.data.app_id}`}</strong>
-              <p className="small muted">App ID {status.data.app_id}</p>
-            </div>
-            <div className="row wrap">
-              {status.data.installation_url && (
-                <a
-                  className="button"
-                  href={status.data.installation_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Install app ↗
-                </a>
-              )}
+      {status.data?.configured ? (
+        <>
+          <p>{status.data.name}</p>
+          <p className="muted">{status.data.repository_count} repositories available</p>
+          <a className="button" href={status.data.installation_url}>
+            Manage repositories on GitHub ↗
+          </a>
+          <details className="top-space">
+            <summary>Advanced</summary>
+            <div className="actions top-space">
               <button
                 disabled={action.busy}
-                onClick={() => {
-                  void action.run(
-                    () => mutate('/integrations/github/sync', 'POST', {}),
-                    'Installations refreshed.',
-                  );
-                }}
+                onClick={() =>
+                  void action.run(async () => {
+                    await mutate('/integrations/github/sync', 'POST', {});
+                    status.reload();
+                  }, 'Repositories refreshed.')
+                }
               >
-                Refresh installations
+                Refresh repositories
+              </button>
+              <button disabled={action.busy} onClick={() => void connect()}>
+                Reconnect GitHub
               </button>
               <button
-                className="quiet"
-                onClick={() => {
-                  if (editing && !draft.discard()) return;
-                  draft.markSaved({
-                    appId: String(status.data?.app_id ?? ''),
-                    slug: status.data?.app_slug ?? '',
-                    key: '',
-                  });
-                  setKey('');
-                  setAppId(String(status.data?.app_id ?? ''));
-                  setSlug(status.data?.app_slug ?? '');
-                  setEditing((value) => !value);
-                }}
+                disabled={action.busy}
+                onClick={() =>
+                  void action.run(async () => {
+                    await mutate('/integrations/github', 'DELETE');
+                    status.reload();
+                  }, 'GitHub disconnected.')
+                }
               >
-                Reconfigure
+                Disconnect GitHub
               </button>
             </div>
-          </div>
-          {status.data.installations.length ? (
-            <ul className="plain-list">
-              {status.data.installations.map((installation) => (
-                <li key={installation.id}>
-                  {installation.account}{' '}
-                  <span className="muted tiny">Installation {installation.id}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="small muted">
-              No installations recorded yet. Install the app, then refresh.
-            </p>
-          )}
-        </div>
-      )}
-      {(!status.data?.configured || editing) && (
-        <form
-          className="top-space"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void action.run(async () => {
-              await mutate('/integrations/github', 'PUT', {
-                app_id: appId,
-                app_slug: slug,
-                private_key: key,
-              });
-              draft.markSaved({ appId, slug, key: '' });
-              setKey('');
-              setEditing(false);
-            }, 'GitHub App configured. Install it and refresh installations.');
-          }}
-        >
-          <div className="form-grid">
-            <label>
-              GitHub App ID
-              <input
-                value={appId}
-                inputMode="numeric"
-                pattern="[0-9]+"
-                onChange={(e) => setAppId(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              App slug
-              <input
-                value={slug}
-                pattern="[A-Za-z0-9-]+"
-                onChange={(e) => setSlug(e.target.value)}
-                placeholder="my-tokendrain"
-                required
-              />
-            </label>
-          </div>
-          <label>
-            Private key file (.pem)
-            <input
-              type="file"
-              accept=".pem,text/plain"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void file.text().then(setKey);
-                e.target.value = '';
-              }}
-            />
-          </label>
-          <label>
-            Private key
-            <textarea
-              required
-              rows={4}
-              autoComplete="off"
-              spellCheck={false}
-              className="mono"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder="-----BEGIN RSA PRIVATE KEY-----"
-            />
-          </label>
-          <UnsavedNotice dirty={draft.dirty} />
-          <button className="primary" disabled={action.busy}>
-            Save GitHub App
+          </details>
+          {status.data.policy_errors?.map((error) => (
+            <ErrorNotice key={error} error={error} />
+          ))}
+        </>
+      ) : (
+        <>
+          <p className="small muted">
+            Tokendrain needs repository administration access to enforce PR-only mode. Autonomous
+            VMs never receive that permission.
+          </p>
+          <button className="primary" disabled={action.busy} onClick={() => void connect()}>
+            Connect GitHub
           </button>
-        </form>
+        </>
       )}
       <ActionNotice {...action} />
     </section>
@@ -570,7 +447,7 @@ export function ProjectGitHubPanel({ id }: { id: string }) {
   return (
     <section className="panel">
       <h2>GitHub repository</h2>
-      <p className="muted">Select a repository and the capabilities this project needs.</p>
+      <p className="muted">Choose a repository and how the AI may write.</p>
       <ErrorNotice error={resource.error} />
       {resource.data === undefined ? (
         <Loading />
@@ -591,13 +468,18 @@ function GitHubEditor({ id, initial }: { id: string; initial: ProjectGitHub | nu
       onSubmit={(e) => {
         e.preventDefault();
         void action.run(async () => {
-          await mutate(`/projects/${id}/github`, 'PUT', githubPayload(value));
-          draft.markSaved();
+          const saved = await mutate<ProjectGitHub>(
+            `/projects/${id}/github`,
+            'PUT',
+            githubPayload(value),
+          );
+          setValue(saved);
+          draft.markSaved(saved);
           setConnected(true);
         }, 'Repository integration saved.');
       }}
     >
-      <GitHubFields value={value} onChange={setValue} />
+      <GitHubFields value={value} onChange={setValue} projectId={id} />
       <UnsavedNotice dirty={draft.dirty} />
       <ActionNotice {...action} notice={draft.dirty ? undefined : action.notice} />
       <div className="form-actions">

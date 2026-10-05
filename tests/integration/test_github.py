@@ -1,119 +1,71 @@
+"""Focused security and lifecycle checks for the documented GitHub REST contracts."""
+
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
-import jwt
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from sqlalchemy import select
+from test_api import api, new_project  # noqa: F401
 
-from tokendrain.credentials.store import EncryptedFileCredentialStore
-from tokendrain.github.provider import GitHubProvider, IntegrationInput
+from tokendrain.db.models import GitHubApp, GitHubPolicy, Setting
+from tokendrain.github.policy import protection_verified, ruleset_payload
+from tokendrain.github.provider import (
+    APP_PERMISSIONS,
+    InstallationToken,
+    IntegrationInput,
+    app_manifest,
+)
+from tokendrain.orchestration.driver import guest_github_secret
 
 
-async def test_jwt_scoped_tokens_and_refresh_lock(tmp_path: Path) -> None:
+@pytest.fixture
+async def github(api):  # noqa: F811
+    client, services = api
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private = key.private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
     )
-    store = EncryptedFileCredentialStore(tmp_path, b"x" * 32)
-    await store.put("key", private)
-    requests: list[httpx.Request] = []
+    await services.credentials.put("test-github-key", private)
+    state = {"ruleset": None, "creates": 0, "deletes": 0, "reject": False, "requests": []}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        claims = jwt.decode(
-            request.headers["authorization"].removeprefix("Bearer "),
-            key.public_key(),
-            algorithms=["RS256"],
-            options={"verify_aud": False},
-        )
-        assert claims["iss"] == "1234"
-        assert 0 < claims["exp"] - claims["iat"] <= 600
-        assert request.headers["x-github-api-version"] == "2026-03-10"
-        assert request.url.path == "/app/installations/7/access_tokens"
-        assert json.loads(request.content) == {
-            "repository_ids": [99],
-            "permissions": {
-                "contents": "write",
-                "issues": "read",
-                "actions": "write",
-                "workflows": "write",
-            },
-        }
-        return httpx.Response(
-            201,
-            json={
-                "token": "short-lived-installation-token",
-                "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-                "permissions": {
-                    "contents": "write",
-                    "issues": "read",
-                    "actions": "write",
-                    "workflows": "write",
+    def handler(request):
+        path, method = request.url.path, request.method
+        body = json.loads(request.content) if request.content else None
+        state["requests"].append((path, method, body))
+        if path.startswith("/app-manifests/"):
+            assert "authorization" not in request.headers
+            return httpx.Response(
+                201,
+                json={
+                    "id": 123,
+                    "slug": "tokendrain-test",
+                    "pem": private.decode(),
+                    "client_secret": "discard-client-secret",
+                    "webhook_secret": "discard-webhook-secret",
                 },
-            },
-        )
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        provider = GitHubProvider(store, http)
-        integration = IntegrationInput(
-            installation_id=7,
-            repository_id=99,
-            repository_name="owner/repo",
-            permissions={
-                "contents": "write",
-                "issues": "read",
-                "actions": "write",
-                "workflows": "write",
-            },
-        )
-        results = await asyncio.gather(
-            *(provider.token("1234", "key", integration) for _ in range(12))
-        )
-        assert len(requests) == 1
-        assert all(
-            result.token.get_secret_value() == "short-lived-installation-token"
-            for result in results
-        )
-        assert "short-lived-installation-token" not in repr(results[0])
-
-
-async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path) -> None:
-    from asgi_lifespan import LifespanManager
-
-    from tokendrain.api.app import create_app
-    from tokendrain.application import Overrides
-    from tokendrain.config import Settings
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private = key.private_bytes(
-        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-    ).decode()
-
-    installation_permissions = {"contents": "read", "issues": "write", "actions": "read"}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path == "/app":
-            return httpx.Response(200, json={"id": 123, "slug": "test-app"})
+            )
         if path == "/app/installations":
             return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": 7,
-                        "account": {"login": "owner"},
-                        "permissions": installation_permissions,
-                    }
-                ],
+                200, json=[{"id": 7, "account": {"login": "owner"}, "permissions": APP_PERMISSIONS}]
             )
         if path == "/app/installations/7/access_tokens":
-            assert json.loads(request.content) == {"permissions": {"metadata": "read"}}
-            return httpx.Response(201, json={"token": "metadata-only"})
+            permissions = body["permissions"]
+            if permissions != {"metadata": "read"}:
+                assert body["repository_ids"] == [99]
+            return httpx.Response(
+                201,
+                json={
+                    "token": "host-policy" if "administration" in permissions else "guest-scoped",
+                    "permissions": permissions,
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                },
+            )
         if path == "/installation/repositories":
-            assert request.headers["authorization"] == "Bearer metadata-only"
             return httpx.Response(
                 200,
                 json={
@@ -122,108 +74,242 @@ async def test_github_api_setup_scope_validation_and_key_rotation(tmp_path: Path
                             "id": 99,
                             "full_name": "owner/repo",
                             "private": True,
-                            "default_branch": "main",
+                            "default_branch": "trunk",
                         }
                     ]
                 },
             )
-        raise AssertionError(path)
+        if path == "/repositories/99":
+            return httpx.Response(200, json={"id": 99, "full_name": "owner/repo"})
+        assert path.startswith("/repos/owner/repo/rulesets")
+        assert request.headers["authorization"] == "Bearer host-policy"
+        if path.endswith("/rulesets") and method == "GET":
+            return httpx.Response(200, json=[state["ruleset"]] if state["ruleset"] else [])
+        if method in {"POST", "PUT"}:
+            assert body == ruleset_payload()
+            if state["reject"]:
+                return httpx.Response(403, json={"message": "Upgrade your plan to use rulesets."})
+            if method == "POST":
+                state["creates"] += 1
+            state["ruleset"] = {**body, "id": 42, "source_type": "Repository"}
+            if state.pop("drop_create_response", False):
+                raise httpx.ReadTimeout("Response lost after creation", request=request)
+            return httpx.Response(201, json=state["ruleset"])
+        if method == "DELETE":
+            state["deletes"] += 1
+            state["ruleset"] = None
+            return httpx.Response(204)
+        return (
+            httpx.Response(200, json=state["ruleset"])
+            if state["ruleset"]
+            else httpx.Response(404, json={"message": "Not Found"})
+        )
 
-    upstream = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    token_file = tmp_path / "admin-token"
-    token_file.write_text("t" * 48)
-    token_file.chmod(0o600)
-    app = create_app(
-        Settings(
-            state_dir=tmp_path,
-            backend="mock",
-            public_url="http://testserver",
-            admin_token_file=token_file,
-        ),
-        Overrides(http=upstream, start_workers=False),
-    )
-    async with LifespanManager(app):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://testserver",
-            headers={"X-Tokendrain-Request": "1"},
-        ) as client:
-            await client.post(
-                "/api/v1/session", json={"token": (tmp_path / "admin-token").read_text()}
-            )
-            configured = await client.put(
-                "/api/v1/integrations/github", json={"app_id": "123", "private_key": private}
-            )
-            assert configured.status_code == 200, configured.text
-            assert "PRIVATE KEY" not in configured.text
-            assert configured.json()["installations"][0]["id"] == "7"
-            project = (
-                await client.post("/api/v1/projects", json={"name": "GitHub project"})
-            ).json()["id"]
-            binding = {
-                "installation_id": "7",
-                "repository_id": 99,
-                "repository_name": "owner/repo",
-                "permissions": {"contents": "write"},
-            }
-            denied = await client.put(f"/api/v1/projects/{project}/github", json=binding)
-            before = len((await client.get("/api/v1/projects")).json())
-            invalid_create = await client.post(
-                "/api/v1/projects", json={"name": "Denied integration", "github": binding}
-            )
-            assert invalid_create.status_code == 409, invalid_create.text
-            assert len((await client.get("/api/v1/projects")).json()) == before
-            assert denied.status_code == 409 and "does not grant" in denied.text
-            binding["permissions"] = {"actions": "write"}
-            denied_actions = await client.put(f"/api/v1/projects/{project}/github", json=binding)
-            assert denied_actions.status_code == 409
-            assert "does not grant actions:write" in denied_actions.text
-            binding["permissions"] = {"workflows": "read"}
-            invalid_workflows = await client.put(f"/api/v1/projects/{project}/github", json=binding)
-            assert invalid_workflows.status_code == 422
-            binding["permissions"] = {"workflows": "write"}
-            denied_workflows = await client.put(f"/api/v1/projects/{project}/github", json=binding)
-            assert denied_workflows.status_code == 409
-            assert "does not grant workflows:write" in denied_workflows.text
-            installation_permissions["workflows"] = "write"
-            assert (await client.post("/api/v1/integrations/github/sync")).status_code == 200
-            binding["permissions"] = {
-                "contents": "read",
-                "issues": "write",
-                "actions": "read",
-                "workflows": "write",
-            }
-            attached = await client.put(f"/api/v1/projects/{project}/github", json=binding)
-            assert attached.status_code == 200, attached.text
-            assert attached.json()["permissions"] == binding["permissions"]
-            created = await client.post(
-                "/api/v1/projects",
-                json={
-                    "name": "Integrated from creation",
-                    "default_model": "codex-model",
-                    "default_reasoning_effort": "high",
-                    "github": binding,
-                    "initial_tasks": [{"title": "Approved task", "column": "todo"}],
-                },
-            )
-            assert created.status_code == 201, created.text
-            created_id = created.json()["id"]
-            assert created.json()["default_model"] == "codex-model"
-            initial_binding = (await client.get(f"/api/v1/projects/{created_id}/github")).json()
-            assert initial_binding["permissions"] == binding["permissions"]
-            tasks = (await client.get(f"/api/v1/projects/{created_id}/tasks")).json()
-            assert tasks[0]["title"] == "Approved task"
-            # A new key for the same App must retain the explicit project grant.
-            assert (
-                await client.put(
-                    "/api/v1/integrations/github", json={"app_id": "123", "private_key": private}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as upstream:
+        services.github.http = upstream
+        async with services.sessions.begin() as db:
+            db.add(
+                GitHubApp(
+                    id=1, app_id="123", slug="tokendrain-test", credential_ref="test-github-key"
                 )
-            ).status_code == 200
-            assert (await client.get(f"/api/v1/projects/{project}/github")).json()[
-                "repository_id"
-            ] == 99
-            binding["repository_id"] = 999
-            assert (
-                await client.put(f"/api/v1/projects/{project}/github", json=binding)
-            ).status_code == 409
-            assert (await client.delete(f"/api/v1/projects/{project}/github")).status_code == 204
+            )
+        assert (await client.post("/api/v1/integrations/github/sync")).status_code == 200
+        yield client, services, state
+
+
+def test_manifest_private_url_and_guest_boundary():
+    manifest = app_manifest("https://drain.tail123.ts.net", "tokendrain-test")
+    assert manifest["redirect_url"].startswith("https://drain.tail123.ts.net/")
+    assert manifest["setup_url"].startswith("https://drain.tail123.ts.net/")
+    assert manifest["hook_attributes"]["active"] is False
+    assert not manifest["default_events"] and manifest["request_oauth_on_install"] is False
+    for mode in ("read_only", "pull_requests", "direct_write"):
+        binding = IntegrationInput(
+            installation_id=7, repository_id=99, repository_name="o/r", access_mode=mode
+        )
+        assert "administration" not in binding.permissions
+        assert "workflows" not in binding.permissions
+        if mode == "read_only":
+            assert set(binding.permissions.values()) == {"read"}
+    token = InstallationToken(
+        token="host-secret", expires_at=datetime.now(UTC), permissions={"administration": "write"}
+    )
+    with pytest.raises(ValueError, match="never be sent to guestd"):
+        guest_github_secret(token)
+    unsafe = ruleset_payload() | {
+        "bypass_actors": [{"actor_type": "Integration", "actor_id": 123, "bypass_mode": "always"}]
+    }
+    assert not protection_verified(unsafe)
+
+
+async def test_manifest_state_browser_binding_expiry_and_replay(github):
+    client, services, state = github
+    setup = (await client.post("/api/v1/integrations/github/connect", json={})).json()
+    value = parse_qs(urlsplit(setup["action"]).query)["state"][0]
+    assert setup["state"] == value
+    assert (
+        await client.get(
+            "/api/v1/integrations/github/callback", params={"code": "test", "state": "forged"}
+        )
+    ).status_code == 400
+    callback = "/api/v1/integrations/github/callback?code=test&state=" + value
+    browser_cookie = client.cookies.get("tokendrain_github_manifest")
+    client.cookies.delete("tokendrain_github_manifest")
+    assert (await client.get(callback)).status_code == 400
+    client.cookies.set("tokendrain_github_manifest", browser_cookie)
+    result = await client.get(callback)
+    assert result.status_code == 303, result.text
+    assert result.headers["location"] == "https://github.com/apps/tokendrain-test/installations/new"
+    assert (await client.get(callback)).status_code == 400
+    assert (
+        len([request for request in state["requests"] if request[0].startswith("/app-manifests")])
+        == 1
+    )
+    status = (await client.get("/api/v1/integrations/github")).text
+    assert (
+        "PRIVATE KEY" not in status and "app_id" not in status and "installation_id" not in status
+    )
+    setup = (await client.post("/api/v1/integrations/github/connect", json={})).json()
+    async with services.sessions.begin() as db:
+        pending = await db.get(Setting, "github_manifest")
+        pending.value = {**pending.value, "expires_at": 0}
+    assert (
+        await client.get(
+            "/api/v1/integrations/github/callback", params={"code": "test", "state": setup["state"]}
+        )
+    ).status_code == 400
+    # The manual credential setup endpoint has been removed.
+    assert (await client.put("/api/v1/integrations/github", json={})).status_code == 405
+
+
+async def test_shared_ruleset_conflicts_cleanup_and_scoped_tokens(github):
+    client, services, state = github
+    first, second, third = [
+        await new_project(client, name) for name in ("Project A", "Project B", "Project C")
+    ]
+    binding = {"repository_id": 99, "access_mode": "pull_requests"}
+
+    async def attach(project, mode):
+        return await client.put(
+            f"/api/v1/projects/{project}/github", json={**binding, "access_mode": mode}
+        )
+
+    assert (await attach(first, "pull_requests")).status_code == 200
+    assert (await attach(second, "pull_requests")).status_code == 200
+    assert state["creates"] == 1
+    assert protection_verified(state["ruleset"])
+    # A user edit that adds App bypass must be removed before another writable Run.
+    state["ruleset"]["bypass_actors"].append(
+        {"actor_type": "Integration", "actor_id": 123, "bypass_mode": "always"}
+    )
+    assert (await attach(second, "pull_requests")).status_code == 200
+    assert protection_verified(state["ruleset"])
+    denied = await attach(third, "direct_write")
+    assert denied.status_code == 409
+    assert denied.json()["detail"]["conflicting_project_name"] in {"Project A", "Project B"}
+    denied_create = await client.post(
+        "/api/v1/projects",
+        json={"name": "Conflict", "github": {**binding, "access_mode": "direct_write"}},
+    )
+    assert denied_create.status_code == 409
+    inventory = (await client.get("/api/v1/integrations/github/repositories")).json()[0]
+    assert len(inventory["used_by"]) == 2 and "installation_id" not in inventory
+    assert (await attach(third, "read_only")).status_code == 200
+    for mode in ("read_only", "pull_requests", "direct_write"):
+        token = await services.github.token(
+            "123",
+            "test-github-key",
+            IntegrationInput(
+                installation_id=7, repository_id=99, repository_name="owner/repo", access_mode=mode
+            ),
+        )
+        assert guest_github_secret(token) == "guest-scoped"
+        assert "administration" not in token.permissions
+    assert (await client.delete(f"/api/v1/projects/{first}/github")).status_code == 204
+    assert state["deletes"] == 0
+    assert (await attach(second, "direct_write")).status_code == 200  # excludes edited project
+    assert state["deletes"] == 1
+    assert (await attach(first, "pull_requests")).status_code == 409
+    assert (await client.delete(f"/api/v1/projects/{second}")).status_code == 204
+    # Concurrent incompatible creates must serialize into one success and one conflict.
+    outcomes = await asyncio.gather(
+        *(
+            client.post(
+                "/api/v1/projects",
+                json={"name": mode, "github": {"repository_id": 99, "access_mode": mode}},
+            )
+            for mode in ("pull_requests", "direct_write")
+        )
+    )
+    assert sorted(response.status_code for response in outcomes) == [201, 409]
+    winner = next(response.json()["id"] for response in outcomes if response.status_code == 201)
+    assert (await client.delete(f"/api/v1/projects/{winner}")).status_code == 204
+    assert (await attach(first, "pull_requests")).status_code == 200
+    deletes = state["deletes"]
+    assert (await client.delete(f"/api/v1/projects/{first}")).status_code == 204
+    assert state["deletes"] == deletes + 1
+    assert (await client.delete("/api/v1/integrations/github")).status_code == 204
+
+
+async def test_ruleset_capability_failure_keeps_read_only_and_explicit_direct_write(github):
+    from tokendrain.github.policy import reconcile_repository
+
+    client, services, state = github
+    state["reject"] = True
+    project = await new_project(client)
+    result = await client.put(f"/api/v1/projects/{project}/github", json={"repository_id": 99})
+    assert result.status_code == 200
+    assert "Upgrade your plan" in result.json()["policy_error"]
+    with pytest.raises(ValueError, match="could not enforce PR-only"):
+        await reconcile_repository(services.sessions, services.github, 99)
+    async with services.sessions() as db:
+        assert (await db.scalar(select(GitHubPolicy))).error
+    from unittest.mock import AsyncMock
+
+    from tokendrain.domain import RunTemplate
+
+    vm_start = AsyncMock(side_effect=AssertionError("Unprotected VM must not start"))
+    services.supervisor.vm.start = vm_start
+    run = await services.runs.create(RunTemplate(projects=[{"project_id": project}]))
+    await services.supervisor.execute(run["executions"][0]["id"], asyncio.Event())
+    vm_start.assert_not_called()
+    failed = (await services.runs.get(run["id"]))["executions"][0]
+    assert failed["status"] == "failed" and "could not enforce PR-only" in failed["error"]
+    assert not any(
+        body and body.get("permissions", {}).get("contents") == "write"
+        for _, _, body in state["requests"]
+    )
+    readonly = await client.put(
+        f"/api/v1/projects/{project}/github", json={"repository_id": 99, "access_mode": "read_only"}
+    )
+    assert readonly.status_code == 200 and readonly.json()["policy_error"] is None
+    direct = await client.put(
+        f"/api/v1/projects/{project}/github",
+        json={"repository_id": 99, "access_mode": "direct_write"},
+    )
+    assert direct.status_code == 200 and direct.json()["policy_error"] is None
+
+
+async def test_uncertain_rule_creation_is_durable_and_never_weakens_unknown_rules(github):
+    from tokendrain.github.policy import reconcile_repository
+
+    client, services, state = github
+    state["drop_create_response"] = True
+    project = await new_project(client)
+    result = await client.put(f"/api/v1/projects/{project}/github", json={"repository_id": 99})
+    assert result.status_code == 200 and result.json()["policy_error"]
+    async with services.sessions() as db:
+        policy = await db.get(GitHubPolicy, 99)
+        assert policy.may_exist and policy.ruleset_id is None
+    assert state["creates"] == 1
+    # Unknown ownership requires recovery, never another create or an arbitrary delete.
+    with pytest.raises(ValueError, match="untracked tokendrain ruleset"):
+        await reconcile_repository(services.sessions, services.github, 99)
+    direct = await client.put(
+        f"/api/v1/projects/{project}/github",
+        json={"repository_id": 99, "access_mode": "direct_write"},
+    )
+    assert direct.status_code == 200 and "untracked" in direct.json()["policy_error"]
+    with pytest.raises(ValueError, match="untracked tokendrain ruleset"):
+        await reconcile_repository(services.sessions, services.github, 99)
+    assert state["creates"] == 1 and state["deletes"] == 0

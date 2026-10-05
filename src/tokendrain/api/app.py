@@ -99,7 +99,9 @@ def create_app(settings: Settings | None = None, overrides: Overrides | None = N
                 # Starlette CachedRequest forwards this body to the downstream parser.
                 request._body = b"".join(chunks)
             public_callback = (
-                path == "/api/v1/integrations/github/setup" and request.method == "GET"
+                path
+                in {"/api/v1/integrations/github/setup", "/api/v1/integrations/github/callback"}
+                and request.method == "GET"
             )
             if (
                 settings.auth_mode == "token"
@@ -134,7 +136,12 @@ def create_app(settings: Settings | None = None, overrides: Overrides | None = N
 
     @app.exception_handler(ValueError)
     async def invalid(_: Request, error: ValueError) -> JSONResponse:
-        return JSONResponse({"detail": str(error)}, status_code=409)
+        from tokendrain.services import GitHubModeConflict
+
+        return JSONResponse(
+            {"detail": error.detail if isinstance(error, GitHubModeConflict) else str(error)},
+            status_code=409,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def bad_input(_: Request, error: RequestValidationError) -> JSONResponse:

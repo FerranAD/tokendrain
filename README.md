@@ -23,7 +23,7 @@ tokendrain is a self-hosted NixOS service that runs Codex on your software proje
 - Runs Codex without command approval prompts inside isolated Firecracker VMs.
 - Reads the provider's actual usage windows and reset times.
 - Stops at your usage thresholds, with either a short wrap-up or hard interruption.
-- Gives each project selected GitHub repository permissions, if you want them.
+- Lets each project use GitHub with Read only, Pull requests, or Direct write access.
 - Keeps generated work in the Workspace even without GitHub. Browse files and previews while idle; download individual files, folders as ZIP, or the whole Workspace as ZIP.
 - Starts Runs now or on timezone-aware cron schedules.
 
@@ -162,7 +162,7 @@ Back up the encryption key at `/var/lib/tokendrain-keys/master.key` with your ap
 ## First Run
 
 1. Open Settings and import your Codex `auth.json`. Credentials refresh automatically; this isn't a one-hour login. [Authentication details](docs/openai-auth.md).
-2. Optionally connect your own [GitHub App](docs/github-app.md), then choose the repository and permissions a project receives. Publishing a branch needs Contents write access; opening a PR needs Pull requests write access.
+2. Optionally [connect GitHub](docs/github-app.md), choose repositories on GitHub, then select a repository and Read only, Pull requests, or Direct write access for each project. Tokendrain enforces Pull requests mode through GitHub.
 3. Create a project with a description and Todo tasks. Add any required secrets with descriptions of what they're for.
 4. Prepare a Run. Pick projects, models, reasoning levels, stop conditions, and Graceful or Hard behavior.
 5. Start it—or save a schedule for later.
