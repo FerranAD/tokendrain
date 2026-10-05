@@ -130,6 +130,8 @@ nix build .#web
 nix build .#guest-artifacts
 ```
 
+Package builds and `nixos-rebuild switch` run lightweight Python import checks, without pytest. Run `nix flake check` for repository validation, including the ordinary Python suite (excluding `kvm` and `nix` markers) and the existing NixOS/module and Firecracker checks. To run only the ordinary Python check through Nix, use `nix build .#checks.x86_64-linux.python -L`.
+
 Outputs are exported for `x86_64-linux` and `aarch64-linux`; real KVM validation should be repeated on the architecture being deployed. `nix flake check` includes VM checks and therefore has greater resource/KVM requirements than ordinary Python tests. A first guest build downloads a substantial development closure.
 
 For a guest change, rebuild `guest-artifacts` before the KVM test. For a Python change, rerun relevant Python tests and the package build. For frontend changes, rerun type/build checks and relevant browser tests. Keep Alembic revisions forward-compatible with existing state; production migration is never `create_all()`.

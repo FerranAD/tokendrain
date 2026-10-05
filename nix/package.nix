@@ -4,6 +4,7 @@
   makeWrapper,
   coreutils,
   e2fsprogs,
+  doCheck ? false,
 }:
 python312Packages.buildPythonApplication {
   pname = "tokendrain";
@@ -61,14 +62,18 @@ python312Packages.buildPythonApplication {
       e2fsprogs
     ])
   ];
-  nativeCheckInputs = [
-    e2fsprogs
-  ]
-  ++ (with python312Packages; [
-    pytestCheckHook
-    pytest-asyncio
-    asgi-lifespan
-  ]);
+  # Deployment builds retain import checks; pytest is enabled by checks.python.
+  inherit doCheck;
+  nativeCheckInputs = lib.optionals doCheck (
+    [
+      e2fsprogs
+    ]
+    ++ (with python312Packages; [
+      pytestCheckHook
+      pytest-asyncio
+      asgi-lifespan
+    ])
+  );
   disabledTestMarks = [
     "kvm"
     "nix"

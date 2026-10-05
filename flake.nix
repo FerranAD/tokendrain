@@ -99,6 +99,7 @@
         in
         {
           package = self.packages.${system}.tokendrain;
+          python = self.packages.${system}.tokendrain-guestd.override { doCheck = true; };
           firecracker = import ./nix/tests/firecracker.nix {
             inherit pkgs;
             tokendrainModule = self.nixosModules.tokendrain;
