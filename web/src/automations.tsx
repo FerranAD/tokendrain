@@ -3,14 +3,7 @@ import { useEffect, useState } from 'react';
 import { mutate, useAction, useResource } from './api';
 import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
 import { RunBuilder } from './runs';
-import type {
-  Automation,
-  AutomationOccurrence,
-  Project,
-  RunTemplate,
-  UsageTrigger,
-  UsageWindow,
-} from './types';
+import type { Automation, AutomationOccurrence, Project, RunTemplate, UsageTrigger } from './types';
 import {
   ActionNotice,
   Badge,
@@ -213,7 +206,6 @@ function AutomationEditor({ automation, close }: { automation?: Automation; clos
   const [name, setName] = useState(automation?.name ?? 'Drain weekly usage');
   const [trigger, setTrigger] = useState(automation?.trigger ?? defaultTrigger);
   const [mode, setMode] = useState<Automation['mode']>(automation?.mode ?? 'approval');
-  const usage = useResource<UsageWindow[]>('/usage');
   const ntfy = useResource<{ topic: string }>('/notifications/ntfy');
   const timing = useUnsavedChanges({ name, trigger, mode });
   const patch = (value: Partial<UsageTrigger>) => setTrigger((old) => ({ ...old, ...value }));
@@ -274,44 +266,27 @@ function AutomationEditor({ automation, close }: { automation?: Automation; clos
           </label>
           <div className="form-grid">
             <label>
-              Usage window (minutes)
-              <NumberInput
-                min={1}
-                max={525600}
-                required
+              Usage window
+              <select
+                aria-label="Usage window"
                 value={trigger.window_minutes}
-                list="automation-window-durations"
-                onValueChange={(value) => patch({ window_minutes: value })}
-              />
-            </label>
-            <datalist id="automation-window-durations">
-              <option value={10080}>Weekly</option>
-              {[
-                ...new Set(
-                  usage.data?.map((w) => w.window_minutes).filter((v): v is number => !!v),
-                ),
-              ]
-                .filter((v) => v !== 10080)
-                .map((v) => (
-                  <option key={v} value={v}>
-                    {duration(v)}
-                  </option>
-                ))}
-            </datalist>
-            <label>
-              Limit ID (optional)
-              <input
-                maxLength={200}
-                value={trigger.limit_id || ''}
-                placeholder="Any matching limit"
-                onChange={(e) => patch({ limit_id: e.target.value || null })}
-              />
+                onChange={(event) =>
+                  patch({
+                    window_minutes: Number(event.target.value),
+                    hours_before_reset: event.target.value === '300' ? 1 : 12,
+                    limit_id: null,
+                  })
+                }
+              >
+                <option value={300}>5-hour window</option>
+                <option value={10080}>Weekly window</option>
+              </select>
             </label>
             <label>
               Reset within (hours)
               <NumberInput
                 min={0.01}
-                max={168}
+                max={trigger.window_minutes === 300 ? 5 : 168}
                 step="any"
                 required
                 value={trigger.hours_before_reset}
@@ -371,7 +346,7 @@ function AutomationEditor({ automation, close }: { automation?: Automation; clos
             Checked every 15 minutes. One run per matching reset window. The run stops at reset,
             including during wrap-up, to avoid spending usage from the new window.
           </p>
-          <ErrorNotice error={usage.error || ntfy.error} />
+          <ErrorNotice error={ntfy.error} />
           <UnsavedNotice dirty={timing.dirty} />
         </section>
       </RunBuilder>

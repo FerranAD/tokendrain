@@ -6,7 +6,7 @@ For example: **when weekly reset is within 12 hours and at least 20% remains, wo
 
 ## Configure a rule
 
-- Choose the usage-window duration reported by your provider: weekly is `10080` minutes. Optionally specify a limit ID to target one usage limit.
+- Choose **5-hour window** or **Weekly window**. Switching windows sets the reset time to one hour for the 5-hour window or twelve hours for weekly.
 - Set the reset-within hours and minimum remaining percentage. Both conditions must match. For example, 20% used means 80% remaining.
 - Choose **Launch automatically**, or **Notify and wait for approval** using your saved [ntfy destination](notifications.md).
 - Select projects, models, reasoning, parallel execution, and stop conditions using the ordinary run controls.

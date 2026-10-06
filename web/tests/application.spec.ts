@@ -1061,7 +1061,15 @@ for (const mode of ['automatic', 'approval'] as const) {
     await page.getByRole('button', { name: 'New automation', exact: true }).click();
     await page.getByLabel('Name', { exact: true }).fill('Spend usage');
     await page.getByRole('checkbox', { name: /Package telescope/ }).check();
-    await page.getByLabel('Usage window (minutes)', { exact: true }).fill('720');
+    const window = page.getByLabel('Usage window', { exact: true });
+    await expect(window).toHaveValue('10080');
+    await expect(window.locator('option')).toHaveText(['5-hour window', 'Weekly window']);
+    await expect(page.getByLabel('Limit ID (optional)')).toHaveCount(0);
+    await window.selectOption('300');
+    await expect(page.getByLabel('Reset within (hours)')).toHaveValue('1');
+    await window.selectOption('10080');
+    await expect(page.getByLabel('Reset within (hours)')).toHaveValue('12');
+    await window.selectOption('300');
     await page.getByLabel('Minimum remaining (%)', { exact: true }).fill('40');
     if (mode === 'automatic')
       await page.getByRole('radio', { name: /^Launch automatically/ }).check();
@@ -1071,7 +1079,9 @@ for (const mode of ['automatic', 'approval'] as const) {
       ).toBeChecked();
       await expect(page.getByRole('link', { name: 'Notification settings →' })).toBeVisible();
     }
-    await expect(page.getByLabel('Usage threshold percent').first()).toHaveValue('100');
+    await expect(
+      page.getByLabel('Usage threshold percent').and(page.locator(':enabled')).first(),
+    ).toHaveValue('100');
     await page.getByRole('button', { name: 'Save automation' }).click();
     await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible();
     expect(writes.find((w) => w.path === '/automations')?.body).toMatchObject({
@@ -1079,15 +1089,15 @@ for (const mode of ['automatic', 'approval'] as const) {
       mode,
       enabled: true,
       trigger: {
-        window_minutes: 720,
+        window_minutes: 300,
         limit_id: null,
-        hours_before_reset: 12,
+        hours_before_reset: 1,
         min_remaining_percent: 40,
       },
       run_template: {
         projects: [{ project_id: 'project-a', model: 'codex-test', reasoning_effort: 'medium' }],
         stop_conditions: [
-          { kind: 'usage', window_minutes: 720, used_percent: 100 },
+          { kind: 'usage', window_minutes: 300, used_percent: 100 },
           { kind: 'provider_limit' },
           { kind: 'project_completed' },
         ],
@@ -1308,7 +1318,6 @@ test('automation numeric fields allow empty editing and preserve zero as a valid
   await page.getByRole('checkbox', { name: /Package telescope/ }).check();
   await page.getByRole('radio', { name: /^Launch automatically/ }).check();
   for (const [label, value] of [
-    ['Usage window (minutes)', '720'],
     ['Reset within (hours)', '10.5'],
     ['Minimum remaining (%)', '0'],
   ]) {
@@ -1318,14 +1327,17 @@ test('automation numeric fields allow empty editing and preserve zero as a valid
     await input.pressSequentially(value);
     await expect(input).toHaveValue(value);
   }
-  const threshold = page.getByRole('spinbutton', { name: 'Usage threshold percent' }).first();
+  const threshold = page
+    .getByRole('spinbutton', { name: 'Usage threshold percent' })
+    .and(page.locator(':enabled'))
+    .first();
   await threshold.fill('');
   await expect(threshold).toHaveValue('');
   await threshold.pressSequentially('90');
   await page.getByRole('button', { name: 'Save automation' }).click();
   await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible();
   expect(writes.find((w) => w.path === '/automations')?.body.trigger).toEqual({
-    window_minutes: 720,
+    window_minutes: 10080,
     limit_id: null,
     hours_before_reset: 10.5,
     min_remaining_percent: 0,
