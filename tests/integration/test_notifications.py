@@ -186,7 +186,7 @@ async def test_api_configuration_secrets_and_safe_delivery_errors(tmp_path: Path
 @pytest.mark.parametrize(
     "patch",
     [
-        {"used_percent": 21},
+        {"used_percent": 91},
         {"window_minutes": 300},
         {"limit_id": "other"},
         {"resets_at": None},

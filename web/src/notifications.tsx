@@ -29,6 +29,19 @@ interface NtfyStatus extends NtfyConfig {
   };
 }
 
+function defaultReminder(windowMinutes = 10080): UsageAlert {
+  return {
+    id: Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16)).join(
+      '-',
+    ),
+    enabled: true,
+    window_minutes: windowMinutes,
+    limit_id: null,
+    hours_before_reset: windowMinutes === 300 ? 1 : 12,
+    min_remaining_percent: 10,
+  };
+}
+
 export function NotificationSettings() {
   const resource = useResource<NtfyStatus>('/notifications/ntfy');
   return (
@@ -53,7 +66,7 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
     enabled: initial.enabled,
     server_url: initial.server_url,
     topic: initial.topic,
-    rules: initial.rules,
+    rules: initial.rules.length ? initial.rules : [defaultReminder()],
   }));
   const [token, setToken] = useState('');
   const [clearToken, setClearToken] = useState(false);
@@ -142,9 +155,8 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
         )}
         <h3>Usage reminder rules</h3>
         <p className="small muted">
-          Send once per rule and reset window when both conditions match. Remaining usage is 100%
-          minus observed usage. Checks run every minute; unavailable or stale usage sends no
-          reminders. These reminders do not launch runs.
+          Get a reminder to use what's left before reset. Start with the weekly reminder below, or
+          add one for the 5-hour window. Checked every 15 minutes; sent once per reset.
         </p>
         {config.rules.map((rule, index) => (
           <div className="inset top-space" key={rule.id}>
@@ -172,32 +184,27 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
             </div>
             <div className="form-grid">
               <label>
-                Usage window (minutes)
-                <NumberInput
-                  min={1}
-                  max={525600}
-                  required
+                Usage window
+                <select
+                  aria-label="Usage window"
                   value={rule.window_minutes}
-                  onValueChange={(value) => updateRule(rule.id, { window_minutes: value })}
-                />
-                <span className="tiny muted">Weekly: 10080 · five-hour: 300</span>
-              </label>
-              <label>
-                Limit ID (optional)
-                <input
-                  value={rule.limit_id ?? ''}
-                  maxLength={200}
                   onChange={(event) =>
-                    updateRule(rule.id, { limit_id: event.target.value || null })
+                    updateRule(rule.id, {
+                      window_minutes: Number(event.target.value),
+                      hours_before_reset: event.target.value === '300' ? 1 : 12,
+                      limit_id: null,
+                    })
                   }
-                  placeholder="Any limit with this window"
-                />
+                >
+                  <option value={300}>5-hour window</option>
+                  <option value={10080}>Weekly window</option>
+                </select>
               </label>
               <label>
                 Reset within (hours)
                 <NumberInput
                   min={0.1}
-                  max={168}
+                  max={rule.window_minutes === 300 ? 5 : 168}
                   step={0.1}
                   required
                   value={rule.hours_before_reset}
@@ -216,6 +223,11 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
                 />
               </label>
             </div>
+            <p className="small muted">
+              Remind me when the {rule.window_minutes === 300 ? '5-hour' : 'weekly'} window resets
+              within {rule.hours_before_reset} {rule.hours_before_reset === 1 ? 'hour' : 'hours'}{' '}
+              and at least {rule.min_remaining_percent}% of usage remains.
+            </p>
           </div>
         ))}
         <button
@@ -227,14 +239,9 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
               ...config,
               rules: [
                 ...config.rules,
-                {
-                  id: crypto.randomUUID(),
-                  enabled: true,
-                  window_minutes: 10080,
-                  limit_id: null,
-                  hours_before_reset: 12,
-                  min_remaining_percent: 80,
-                },
+                defaultReminder(
+                  config.rules.some((rule) => rule.window_minutes === 10080) ? 300 : 10080,
+                ),
               ],
             })
           }

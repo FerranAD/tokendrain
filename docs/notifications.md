@@ -13,18 +13,19 @@ Publishing uses ntfy's [JSON publishing API](https://docs.ntfy.sh/publish/#publi
 
 ## Configure reminders
 
-Add one or more rules and enable usage reminders. For example:
+Enable usage reminders and enter your ntfy topic. A weekly reminder is ready to use:
 
 | Setting | Value |
 | --- | --- |
-| Usage window | `10080` minutes (weekly) |
+| Usage window | Weekly window |
 | Reset within | `12` hours |
-| Minimum remaining usage | `80` percent |
-| Limit ID | Empty to match any limit with that duration |
+| Minimum remaining usage | `10` percent |
 
-Both conditions must match: the reset is within the chosen time and at least the configured percentage remains. Remaining usage means `max(0, 100 − used_percent)`: 20% used means 80% remaining. A weekly rule only matches a provider window whose reported duration is 10080 minutes; short windows are not inferred from primary/secondary labels. Use another duration for other windows, and optionally restrict a rule to a limit ID shown in usage observations.
+Choose **Weekly window** or **5-hour window**. Switching to the 5-hour window sets the reminder to one hour before reset; switching back to weekly sets it to twelve hours. You can adjust the reset time and minimum remaining percentage. **Add usage reminder** adds the other window with those defaults.
 
-The daemon checks every minute, including when projects are idle, and refreshes account metadata without starting inference when live usage is unavailable. Observations older than five minutes, missing reset times, and already expired windows cannot trigger a reminder. An unavailable Codex connection or ntfy server is retried on subsequent checks. Disable individual rules or the whole integration to pause reminders.
+Both conditions must match: the reset is within the chosen time and at least the configured percentage remains. Remaining usage means `max(0, 100 − used_percent)`: 20% used means 80% remaining. The rule matches the provider's reported window duration.
+
+The daemon checks every **15 minutes**, including when projects are idle, and refreshes account metadata without starting inference when live usage is unavailable. Observations older than five minutes, missing reset times, and already expired windows cannot trigger a reminder. An unavailable Codex connection or ntfy server is retried on subsequent checks. Disable individual rules or the whole integration to pause reminders.
 
 Successful delivery is recorded per destination, rule settings, limit, and reset timestamp, so subsequent checks and daemon restarts do not resend it. A new reset window can send again. Changing a rule or its destination can also send a new reminder. A crash after ntfy accepts a message but before the local delivery record is committed can result in a duplicate; delivery is not guaranteed to be exactly once.
 

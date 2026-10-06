@@ -952,7 +952,9 @@ test('ntfy settings save reminders and send a test using saved settings', async 
   await panel.getByLabel('ntfy server URL').fill('https://ntfy.example');
   await panel.getByLabel('Topic', { exact: true }).fill('drain-alerts');
   await panel.getByLabel('Access token (optional)', { exact: true }).fill('fake-token');
-  await panel.getByRole('button', { name: 'Add usage reminder' }).click();
+  await expect(panel.getByLabel('Usage window', { exact: true })).toHaveValue('10080');
+  await expect(panel.getByLabel('Reset within (hours)')).toHaveValue('12');
+  await expect(panel.getByLabel('Minimum remaining usage (%)')).toHaveValue('10');
   await panel.getByLabel('Reset within (hours)').fill('10');
   await panel.getByLabel('Minimum remaining usage (%)').fill('85');
   await expect(panel.getByRole('button', { name: 'Send test notification' })).toBeDisabled();
@@ -971,6 +973,40 @@ test('ntfy settings save reminders and send a test using saved settings', async 
   expect(testCount).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('reminders offer only weekly and 5-hour windows with useful defaults', async ({ page }) => {
+  // LAN HTTP deployments do not expose the secure-context-only randomUUID API.
+  await page.addInitScript(() => Object.defineProperty(crypto, 'randomUUID', { value: undefined }));
+  const { writes, errors } = await fixture(page);
+  await page.goto('/settings');
+  const panel = page.locator('#notifications');
+  const window = panel.getByLabel('Usage window', { exact: true });
+  await expect(window.locator('option')).toHaveText(['5-hour window', 'Weekly window']);
+  await expect(panel.getByLabel('Limit ID (optional)')).toHaveCount(0);
+  await window.selectOption('300');
+  await expect(panel.getByLabel('Reset within (hours)')).toHaveValue('1');
+  await expect(
+    panel.getByText(
+      'Remind me when the 5-hour window resets within 1 hour and at least 10% of usage remains.',
+    ),
+  ).toBeVisible();
+  await window.selectOption('10080');
+  await expect(panel.getByLabel('Reset within (hours)')).toHaveValue('12');
+  await panel.getByRole('button', { name: 'Add usage reminder' }).click();
+  await expect(window.nth(0)).toHaveValue('10080');
+  await expect(window.nth(1)).toHaveValue('300');
+  await panel.getByLabel('Enable usage reminders').check();
+  await panel.getByLabel('Topic', { exact: true }).fill('test-reminders');
+  await panel.getByRole('button', { name: 'Save notifications' }).click();
+  await expect(panel.getByText('Notification settings saved.')).toBeVisible();
+  expect(writes.find((write) => write.path === '/notifications/ntfy')?.body).toMatchObject({
+    rules: [
+      { window_minutes: 10080, hours_before_reset: 12, min_remaining_percent: 10, limit_id: null },
+      { window_minutes: 300, hours_before_reset: 1, min_remaining_percent: 10, limit_id: null },
+    ],
+  });
+  expect(errors).toEqual([]);
 });
 
 const automationTemplate = {
@@ -1181,8 +1217,11 @@ test('project creation points to Codex setup when the account is disconnected', 
   await page.route('**/api/v1/auth/openai/models', (route) => route.fulfill({ json: [] }));
   await page.goto('/projects');
   await page.getByRole('button', { name: 'New project', exact: true }).click();
-  const notice = page.locator('.callout').filter({ hasText: 'Connect your Codex account' });
+  const notice = page.locator('.callout').filter({ hasText: 'Configure Codex' });
   await expect(notice).toBeVisible();
+  await expect(notice).toHaveText('Configure Codex in Settings to choose a model.');
+  await expect(page.getByLabel('Default model', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Default reasoning effort', { exact: true })).toHaveCount(0);
   await expect(notice.getByRole('link', { name: 'Settings' })).toHaveAttribute(
     'href',
     '/settings#openai',

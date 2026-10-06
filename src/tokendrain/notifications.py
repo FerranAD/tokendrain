@@ -48,6 +48,7 @@ class UsageTrigger(Boundary):
 
 
 class UsageAlert(UsageTrigger):
+    min_remaining_percent: float = Field(default=10, ge=0, le=100, allow_inf_nan=False)
     id: str = Field(default_factory=lambda: str(uuid4()), pattern=r"^[a-zA-Z0-9_-]{1,80}$")
     enabled: bool = True
 
@@ -277,4 +278,4 @@ class NtfyService:
                 await self.tick()
             except Exception:
                 log.exception("notifications.worker_failed")
-            await asyncio.sleep(60)
+            await asyncio.sleep(15 * 60)

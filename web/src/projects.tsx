@@ -159,21 +159,23 @@ export function NewProject({ close }: { close: () => void }) {
         <fieldset className="initial-tasks">
           <legend>Agent defaults</legend>
           <ErrorNotice error={account.error} />
-          {account.data?.connected === false && (
+          {!account.data ? (
+            <Loading />
+          ) : !account.data.connected ? (
             <div className="callout">
-              Connect your Codex account in <Link href="/settings#openai">Settings</Link> before
-              running this project.
+              Configure Codex in <Link href="/settings#openai">Settings</Link> to choose a model.
             </div>
+          ) : (
+            <ModelSelector
+              defaults
+              model={model}
+              effort={effort}
+              onChange={(values) => {
+                setModel(values.model);
+                setEffort(values.reasoning_effort);
+              }}
+            />
           )}
-          <ModelSelector
-            defaults
-            model={model}
-            effort={effort}
-            onChange={(values) => {
-              setModel(values.model);
-              setEffort(values.reasoning_effort);
-            }}
-          />
         </fieldset>
         <fieldset className="initial-tasks">
           <legend>GitHub · optional</legend>
