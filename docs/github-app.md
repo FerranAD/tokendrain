@@ -15,6 +15,8 @@ Tokendrain handles registration, encrypted credentials, repository discovery and
 | Pull requests | Push feature branches and open/update PRs. GitHub requires a PR to update the default branch. This is the default writable mode. |
 | Direct write | Publish directly to the default branch when appropriate, or use PRs. Existing repository rules still apply. |
 
+These settings are enforced through GitHub App token permissions and, for Pull requests mode, GitHub branch rules—not just instructions to the agent.
+
 Enable **Allow workflow file changes** only when the project needs to publish GitHub Actions workflow edits. It is unavailable in Read only mode.
 
 Pull requests mode is enforced by GitHub. Tokendrain manages one shared `tokendrain: PR-only` ruleset per repository, targeting its current default branch regardless of its name. It requires pull requests, blocks force pushes and protects the default branch from deletion. Tokendrain requires zero approving reviews; your own rules can impose stronger requirements.

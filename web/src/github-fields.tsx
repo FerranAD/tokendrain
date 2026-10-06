@@ -16,6 +16,15 @@ const modeNames = {
   direct_write: 'Direct write',
 };
 
+const modeDescriptions = {
+  read_only:
+    'Read and clone the repository. Changes stay in the workspace and cannot be published to GitHub.',
+  pull_requests:
+    'Push feature branches and open pull requests. Updating the default branch requires a pull request.',
+  direct_write:
+    'Push directly to the default branch or use pull requests, subject to existing repository rules.',
+};
+
 export function GitHubFields({
   value,
   onChange,
@@ -92,8 +101,10 @@ export function GitHubFields({
               <label className="check-row" key={mode}>
                 <input
                   type="radio"
+                  aria-label={label}
                   name={listId + '-access'}
                   value={mode}
+                  aria-describedby={`${listId}-${mode}-description`}
                   checked={value.access_mode === mode}
                   disabled={mode === blocked}
                   onChange={() =>
@@ -104,10 +115,19 @@ export function GitHubFields({
                     })
                   }
                 />
-                <span>{label}</span>
+                <span>
+                  <strong>{label}</strong>
+                  <span className="hint" id={`${listId}-${mode}-description`}>
+                    {modeDescriptions[mode as ProjectGitHub['access_mode']]}
+                  </span>
+                </span>
               </label>
             ))}
           </fieldset>
+          <p className="small muted">
+            GitHub enforces these settings through GitHub App token permissions and, for Pull
+            requests mode, branch rules—not just instructions to the agent.
+          </p>
           {blocked && (
             <p className="small muted">
               Pull requests and Direct write cannot coexist for the same repository because PR-only
@@ -120,11 +140,18 @@ export function GitHubFields({
           <label className="check-row">
             <input
               type="checkbox"
+              aria-label="Allow workflow file changes"
+              aria-describedby={`${listId}-workflows-description`}
               checked={value.allow_workflows}
               disabled={value.access_mode === 'read_only'}
               onChange={(event) => onChange({ ...value, allow_workflows: event.target.checked })}
             />
-            <span>Allow workflow file changes</span>
+            <span>
+              <strong>Allow workflow file changes</strong>
+              <span className="hint" id={`${listId}-workflows-description`}>
+                Permit publishing edits to GitHub Actions workflows.
+              </span>
+            </span>
           </label>
           <ErrorNotice error={selected?.policy_error || value.policy_error || undefined} />
           {selected?.policy_error && (

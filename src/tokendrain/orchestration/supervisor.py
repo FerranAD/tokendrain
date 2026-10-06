@@ -25,6 +25,7 @@ from tokendrain.db.models import (
 )
 from tokendrain.domain import (
     TERMINAL,
+    DeadlineStop,
     ExecutionState,
     ReportUsage,
     RunReport,
@@ -166,7 +167,7 @@ class Supervisor:
                     queued = list(
                         (
                             await db.execute(
-                                select(ProjectExecution.id, ProjectExecution.run_id, Run.parallel)
+                                select(ProjectExecution, Run)
                                 .join(Run)
                                 .where(ProjectExecution.status == "queued")
                                 .order_by(Run.created_at)
@@ -176,15 +177,32 @@ class Supervisor:
                 for _, cancel, run_id in self.active.values():
                     if run_id in cancelling:
                         cancel.set()
-                for execution_id, run_id, parallel in queued:
+                for queued_execution, queued_run in queued:
+                    execution_id, run_id = queued_execution.id, queued_run.id
+                    parallel, conditions = queued_run.parallel, queued_run.stop_conditions
                     if execution_id in self.active:
                         continue
                     if run_id in cancelling:
                         await self.runs.transition(execution_id, ExecutionState.CANCELLED)
                         await self.finish_run(run_id)
                         continue
+                    deadlines = [
+                        DeadlineStop.model_validate(rule)
+                        for rule in conditions
+                        if rule.get("kind") == "deadline"
+                    ]
+                    if reason := stop_reason(deadlines, [], 0):
+                        async with self.sessions.begin() as db:
+                            live = await db.get(ProjectExecution, execution_id)
+                            assert live
+                            live.termination_reason = "reset_deadline"
+                            live.termination_detail = reason
+                            live.threshold_mode = "hard"
+                        await self.runs.transition(execution_id, ExecutionState.STOPPED)
+                        await self.finish_run(run_id)
+                        continue
                     if len(self.active) >= self.settings.max_concurrency:
-                        break
+                        continue
                     if not parallel and any(value[2] == run_id for value in self.active.values()):
                         continue
                     cancel = asyncio.Event()
@@ -211,6 +229,7 @@ class Supervisor:
             clock_started = time.monotonic()
             project_id, run_id = project.id, run.id
             policy = TypeAdapter(list[StopCondition]).validate_python(run.stop_conditions)
+            deadlines = [rule for rule in policy if isinstance(rule, DeadlineStop)]
             previous_report, _ = await latest_checkpoint(db, project_id)
             integration = await db.get(ProjectGitHub, project_id)
             app = await db.get(GitHubApp, 1)
@@ -270,14 +289,19 @@ class Supervisor:
 
         async def check_boundary(observed: list[UsageWindow] | None = None) -> None:
             nonlocal termination_reason, termination_detail
-            if budget.is_set() or grace_started:
+            deadline_reason = stop_reason(deadlines, [], elapsed())
+            if termination_reason == "reset_deadline":
+                return
+            if not deadline_reason and (budget.is_set() or grace_started):
                 return
             boundary_windows = observed if observed is not None else windows
-            reason = stop_reason(policy, boundary_windows, elapsed())
+            reason = deadline_reason or stop_reason(policy, boundary_windows, elapsed())
             if not reason:
                 return
             termination_reason = (
-                "usage_threshold"
+                "reset_deadline"
+                if deadline_reason
+                else "usage_threshold"
                 if any(
                     isinstance(rule, UsageStop) and stop_reason([rule], boundary_windows, elapsed())
                     for rule in policy
@@ -292,7 +316,7 @@ class Supervisor:
                 assert live
                 live.termination_reason = termination_reason
                 live.termination_detail = reason
-                live.threshold_mode = run.threshold_mode
+                live.threshold_mode = "hard" if deadline_reason else run.threshold_mode
             async with self.sessions() as db:
                 live = await db.get(ProjectExecution, execution_id)
                 assert live
@@ -305,13 +329,21 @@ class Supervisor:
                 run_id=run_id,
                 project_id=project_id,
                 execution_id=execution_id,
-                data={"mode": run.threshold_mode, "reason": termination_reason},
+                data={
+                    "mode": "hard" if deadline_reason else run.threshold_mode,
+                    "reason": termination_reason,
+                },
             )
 
         async def monitored_turn(prompt: str, *, finalizing: bool = False) -> RunReport:
             assert session
             turn_cancel.clear()
-            if cancel.is_set() or (budget.is_set() and not finalizing):
+            await check_boundary()
+            if (
+                cancel.is_set()
+                or termination_reason == "reset_deadline"
+                or (budget.is_set() and not finalizing)
+            ):
                 turn_cancel.set()
                 raise asyncio.CancelledError
 
@@ -321,6 +353,9 @@ class Supervisor:
                 while True:
                     if cancel.is_set():
                         turn_cancel.set()
+                    # Reset deadlines also interrupt the graceful wrap-up turn.
+                    if finalizing:
+                        await check_boundary()
                     if not finalizing:
                         latest = await self.runs.latest_usage()
                         if latest and (
@@ -409,6 +444,8 @@ class Supervisor:
                     # Fail closed before booting a writable guest. The callback also
                     # reconciles at credential rotation boundaries.
                     await github_token()
+                    if reason := stop_reason(deadlines, [], elapsed()):
+                        raise BudgetReached(reason)
                     await self.runs.transition(execution_id, ExecutionState.STARTING_VM)
                     start_attempted = True
                     failure_stage = "vm_start"
@@ -429,6 +466,8 @@ class Supervisor:
                         handle, runtime_values, github_token, emit, observe
                     )
                     redactor = session.redactor
+                    if reason := stop_reason(deadlines, [], elapsed()):
+                        raise BudgetReached(reason)
                     thread_id = await session.initialize(project.thread_id, execution.model)
                     async with self.sessions.begin() as db:
                         live_project = await db.get(Project, project_id)
@@ -451,7 +490,10 @@ class Supervisor:
                         await check_boundary()
                         if budget.is_set():
                             final = ExecutionState.STOPPED
-                            if run.threshold_mode == "hard":
+                            if (
+                                run.threshold_mode == "hard"
+                                or termination_reason == "reset_deadline"
+                            ):
                                 break
                             grace_started = True
                             try:
@@ -603,7 +645,11 @@ class Supervisor:
                         )
                 except BudgetReached as error:
                     final = ExecutionState.STOPPED
-                    termination_reason = "runtime_limit"
+                    termination_reason = (
+                        "reset_deadline"
+                        if stop_reason(deadlines, [], elapsed())
+                        else "runtime_limit"
+                    )
                     termination_detail = str(error)
                     await emit(str(error))
                 except ProviderLimited:
@@ -687,7 +733,13 @@ class Supervisor:
                         assert live
                         live.termination_reason = termination_reason or "infrastructure_error"
                         live.termination_detail = termination_detail or error_text
-                        live.threshold_mode = run.threshold_mode if budget.is_set() else None
+                        live.threshold_mode = (
+                            "hard"
+                            if termination_reason == "reset_deadline"
+                            else run.threshold_mode
+                            if budget.is_set()
+                            else None
+                        )
                         live.interrupted = interrupted
                     # Only valid model checkpoints are saved. Host outcomes never rewrite them.
                     await self.runs.transition(execution_id, final, error_text)

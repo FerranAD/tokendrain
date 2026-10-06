@@ -39,6 +39,7 @@ export interface Project {
 export type StopCondition =
   | { kind: 'usage'; window_minutes: number; used_percent: number; limit_id?: string }
   | { kind: 'elapsed'; seconds: number }
+  | { kind: 'deadline'; at: string }
   | { kind: 'provider_limit' }
   | { kind: 'project_completed' };
 
@@ -85,6 +86,8 @@ export interface Run {
   threshold_mode?: 'graceful' | 'hard';
   stop_conditions: StopCondition[];
   executions: Execution[];
+  automation_occurrence_id?: string | null;
+  automation_name?: string | null;
 }
 
 export interface Schedule {
@@ -191,4 +194,48 @@ export interface Task {
   column: TaskColumn;
   position: number;
   origin: 'user' | 'agent';
+}
+
+export interface UsageTrigger {
+  window_minutes: number;
+  limit_id: string | null;
+  hours_before_reset: number;
+  min_remaining_percent: number;
+}
+
+export interface Automation {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger: UsageTrigger;
+  mode: 'automatic' | 'approval';
+  run_template: RunTemplate;
+  last_checked_at?: string | null;
+  last_error?: string | null;
+}
+
+export interface AutomationOccurrence {
+  id: string;
+  automation_id: string | null;
+  automation_name: string;
+  limit_id: string;
+  window_minutes: number;
+  resets_at: string;
+  matched_window: UsageWindow;
+  current_usage?: UsageWindow[];
+  run_template: RunTemplate;
+  mode: 'automatic' | 'approval';
+  status:
+    | 'ready'
+    | 'pending'
+    | 'launched'
+    | 'dismissed'
+    | 'expired'
+    | 'cancelled'
+    | 'configuration_error';
+  created_at: string;
+  notified_at: string | null;
+  delivery_error: string | null;
+  last_error: string | null;
+  run_id: string | null;
 }

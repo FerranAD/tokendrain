@@ -46,7 +46,7 @@ projects/<project-id>/
 
 The default master key is separate at `/var/lib/tokendrain-keys/master.key` and reaches the daemon through a systemd runtime credential. VM records/sockets live under `/run/tokendrain-vms`; host authentication subprocesses use `/run/tokendrain-auth`. Guest runtime files are in the guest's `/run/tokendrain` tmpfs.
 
-SQLite contains relational projects, runs, executions, reports, usage observations, schedules, events, secret metadata, GitHub app/installations/project bindings, and settings. A project execution holds its model/reasoning configuration; project and execution records retain Codex thread IDs. OpenAI account records are encrypted files, not plaintext database rows. JSON columns hold typed flexible structures such as run templates, provider observations, reports, and storage metadata.
+SQLite contains relational projects, runs, executions, reports, usage observations, schedules, usage automations and their occurrences, events, secret metadata, GitHub app/installations/project bindings, and settings. A project execution holds its model/reasoning configuration; project and execution records retain Codex thread IDs. OpenAI account records are encrypted files, not plaintext database rows. JSON columns hold typed flexible structures such as run templates, provider observations, reports, and storage metadata.
 
 Alembic migrations run before work is admitted. SQLite foreign keys, WAL, transactions, and uniqueness constraints provide durable coordination. Database transactions do not remain open across VM boot, network requests, or filesystem copies.
 
@@ -136,3 +136,10 @@ FastAPI exposes `/api/v1` and serves the packaged Vite build from the same origi
 Events are persisted before notification. SSE uses database IDs for replay and comment heartbeats. The browser coalesces invalidation events, loads bounded historical logs, and appends live events. It does not poll every second. See [web/API.md](../web/API.md) for the full contract.
 
 There is one administrator trust domain per installation. VM separation is not a multi-user authorization system for the control plane.
+
+
+## Usage automations
+
+The host evaluates usage rules at startup and every 15 minutes, refreshing account metadata when needed without model inference. Each matching provider limit/window/reset has a durable occurrence containing the saved run configuration. Automatic launches and website approvals use the ordinary transactional run-admission service. Pending approval requests are committed before ntfy delivery; notifications contain review links without authorization tokens.
+
+Reset deadlines are fixed on the resulting run and enforced by the execution monitor independently of trigger cadence. They interrupt substantive work and graceful wrap-up and prevent queued executions from starting after reset. Editing or disabling rules cancels pending occurrences without changing existing runs.

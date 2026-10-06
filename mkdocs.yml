@@ -59,6 +59,7 @@ nav:
       - Install & first Run: getting-started.md
       - Projects & tasks: workflow.md
       - Usage & stopping: usage-limits.md
+      - Usage automations: automations.md
   - Operate:
       - Operations: operations.md
       - MicroVMs & storage: microvms.md

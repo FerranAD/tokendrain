@@ -142,6 +142,7 @@ export function conditionLabel(condition: StopCondition) {
   if (condition.kind === 'usage')
     return `${duration(condition.window_minutes)} window ≥ ${condition.used_percent}%${condition.limit_id ? ` (${condition.limit_id})` : ''}`;
   if (condition.kind === 'elapsed') return `Elapsed time ≥ ${duration(condition.seconds / 60)}`;
+  if (condition.kind === 'deadline') return `Stop at reset: ${date(condition.at)}`;
   if (condition.kind === 'provider_limit') return 'Provider prevents further work';
   return 'Project is complete';
 }
@@ -298,19 +299,21 @@ export function ExecutionOutcome({ execution }: { execution?: Execution | null }
   const reason = execution.termination_reason;
   const hard = execution.threshold_mode === 'hard';
   const label =
-    reason === 'user_cancelled'
-      ? 'Cancelled by user'
-      : reason === 'usage_threshold'
-        ? `Stopped — ${hard ? 'hard usage limit' : 'usage threshold'} reached`
-        : reason === 'provider_limit'
-          ? 'Stopped — provider limit reached'
-          : reason === 'runtime_limit'
-            ? 'Stopped — runtime limit reached'
-            : reason === 'no_progress'
-              ? 'Stopped — no progress'
-              : reason === 'infrastructure_error'
-                ? 'Execution stopped unexpectedly'
-                : execution.status.replaceAll('_', ' ');
+    reason === 'reset_deadline'
+      ? 'Stopped — usage reset reached'
+      : reason === 'user_cancelled'
+        ? 'Cancelled by user'
+        : reason === 'usage_threshold'
+          ? `Stopped — ${hard ? 'hard usage limit' : 'usage threshold'} reached`
+          : reason === 'provider_limit'
+            ? 'Stopped — provider limit reached'
+            : reason === 'runtime_limit'
+              ? 'Stopped — runtime limit reached'
+              : reason === 'no_progress'
+                ? 'Stopped — no progress'
+                : reason === 'infrastructure_error'
+                  ? 'Execution stopped unexpectedly'
+                  : execution.status.replaceAll('_', ' ');
   return (
     <div className={`execution-outcome outcome-${execution.status}`}>
       <Icon

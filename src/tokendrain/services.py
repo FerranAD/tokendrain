@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tokendrain.db.models import (
+    AutomationOccurrence,
     Event,
     GitHubApp,
     GitHubInstallation,
@@ -496,6 +497,11 @@ class RunService:
             if not row:
                 raise LookupError("Run not found")
             result = columns(row)
+            occurrence = await db.scalar(
+                select(AutomationOccurrence).where(AutomationOccurrence.run_id == run_id)
+            )
+            result["automation_occurrence_id"] = occurrence.id if occurrence else None
+            result["automation_name"] = occurrence.automation_name if occurrence else None
         result["executions"] = await self.executions(run_id=run_id)
         return result
 

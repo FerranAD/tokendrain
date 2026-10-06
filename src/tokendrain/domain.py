@@ -1,5 +1,6 @@
 """Validated domain boundaries. Database and provider wire formats stay at the edges."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -96,6 +97,18 @@ class ElapsedStop(Boundary):
     seconds: int = Field(gt=0, le=60 * 60 * 24 * 31)
 
 
+class DeadlineStop(Boundary):
+    kind: Literal["deadline"] = "deadline"
+    at: datetime
+
+    @field_validator("at")
+    @classmethod
+    def aware_deadline(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("A deadline must include a timezone")
+        return value.astimezone(UTC)
+
+
 class ProviderStop(Boundary):
     kind: Literal["provider_limit"] = "provider_limit"
 
@@ -105,7 +118,8 @@ class CompletedStop(Boundary):
 
 
 StopCondition = Annotated[
-    UsageStop | ElapsedStop | ProviderStop | CompletedStop, Field(discriminator="kind")
+    UsageStop | ElapsedStop | DeadlineStop | ProviderStop | CompletedStop,
+    Field(discriminator="kind"),
 ]
 Reasoning = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
@@ -226,12 +240,13 @@ def usage_window_name(window: UsageWindow) -> str:
 
 
 def stop_reason(
-    conditions: list[StopCondition],
+    conditions: Sequence[StopCondition],
     usage: list[UsageWindow],
     elapsed: float,
     *,
     provider_limited: bool = False,
     project_completed: bool = False,
+    now: datetime | None = None,
 ) -> str | None:
     # Provider refusal and completed projects are always safe natural boundaries.
     if provider_limited:
@@ -239,6 +254,8 @@ def stop_reason(
     if project_completed:
         return "Project completed"
     for condition in conditions:
+        if isinstance(condition, DeadlineStop) and (now or utcnow()) >= condition.at:
+            return "Usage reset deadline reached"
         if isinstance(condition, ElapsedStop) and elapsed >= condition.seconds:
             return f"Runtime reached {condition.seconds} seconds"
         if isinstance(condition, UsageStop):

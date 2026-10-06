@@ -103,3 +103,50 @@ All workspace access rejects active projects. Absolute paths, traversal, and sym
 Execution outcomes include `termination_reason`, `termination_detail`, `threshold_mode`, and `interrupted`. `report` contains the latest valid checkpoint, with `checkpoint_from_execution_id` identifying its source if retained from an older execution. Execution status `stopped` covers budget/provider/no-progress stops. Run thresholds do not fabricate completion reports.
 
 In auth-none mode `GET /session` includes `auth_mode:"none"`; login and cookies are unnecessary. Mutation request-header and Origin checks remain mandatory.
+
+## Usage automations
+
+All endpoints use the existing administrative authentication and same-origin mutation requirements.
+
+| Method               | Path                                            | Behavior                                                                                                                                          |
+| -------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET / POST           | `/api/v1/automations`                           | List rules / create a rule (201).                                                                                                                 |
+| GET / PATCH / DELETE | `/api/v1/automations/{id}`                      | Read, update, or delete a rule (204 on deletion).                                                                                                 |
+| GET                  | `/api/v1/automation-occurrences`                | Pending occurrences and up to 200 history entries; optional `automation_id` filter.                                                               |
+| GET                  | `/api/v1/automation-occurrences/{id}`           | Configuration snapshot, status, errors, run ID, and latest observed `current_usage`.                                                              |
+| POST                 | `/api/v1/automation-occurrences/{id}/authorize` | Refresh usage, recheck conditions, and atomically launch a pending request. Repeating a successful authorization returns the launched occurrence. |
+| POST                 | `/api/v1/automation-occurrences/{id}/dismiss`   | Dismiss a pending request for this reset window.                                                                                                  |
+
+Automation input:
+
+```json
+{
+  "name": "Drain weekly allowance",
+  "enabled": true,
+  "mode": "approval",
+  "trigger": {
+    "window_minutes": 10080,
+    "limit_id": null,
+    "hours_before_reset": 12,
+    "min_remaining_percent": 1
+  },
+  "run_template": {
+    "projects": [{ "project_id": "project-id", "model": "", "reasoning_effort": "medium" }],
+    "parallel": true,
+    "threshold_mode": "graceful",
+    "stop_conditions": [
+      { "kind": "usage", "window_minutes": 10080, "used_percent": 100 },
+      { "kind": "provider_limit" },
+      { "kind": "project_completed" }
+    ]
+  }
+}
+```
+
+`mode` is `automatic` or `approval`. Enabled approval rules require a saved ntfy topic. Trigger durations range from 1 to 525600 minutes, reset horizons are greater than zero and at most 168 hours, and remaining percentages range from 0 to 100. PATCH accepts a partial definition; changing a rule cancels its unlaunched occurrences for the current window.
+
+Rules include `id`, `created_at`, `last_checked_at`, and `last_error`. Occurrences include `id`, nullable `automation_id`, `automation_name`, `limit_id`, `window_minutes`, `resets_at`, `matched_window`, `run_template`, `mode`, `status`, `created_at`, `notified_at`, `delivery_error`, `last_error`, and nullable `run_id`. Status is `ready`, `pending`, `launched`, `dismissed`, `expired`, `cancelled`, or `configuration_error`. Reads reflect expiration immediately, independently of worker cadence. Invalid authorization or admission conflicts return 409; the request remains pending on a temporary conflict.
+
+Evaluation occurs at daemon startup and every 900 seconds. Each rule/provider-window/reset combination creates at most one occurrence. Run creation commits with the occurrence's launched state. Notifications open the configured public URL plus `/automation-occurrences/{id}` and contain no authorization token.
+
+Run stop conditions now also accept `{"kind":"deadline","at":"2026-10-05T20:00:00Z"}` with a required timezone. Automation launches add a fixed reset deadline and bind otherwise unrestricted triggering-window usage stops to the matched limit ID. Deadline enforcement is a hard stop, including during graceful finalization. Run responses include nullable `automation_occurrence_id` and `automation_name`.

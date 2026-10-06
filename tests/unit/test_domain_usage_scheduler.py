@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from tokendrain.credentials import SecretRedactor
 from tokendrain.domain import (
+    DeadlineStop,
     ElapsedStop,
     ExecutionState,
     ProjectConfig,
@@ -130,3 +131,38 @@ def test_schedule_boundary_rejects_unknown_zone_and_invalid_cron() -> None:
         )
     with pytest.raises(ValidationError, match="cron"):
         ScheduleInput(name="Invalid", cron="", run_template=template)
+
+
+def test_reset_deadline_requires_timezone_and_matches_boundary() -> None:
+    with pytest.raises(ValidationError):
+        DeadlineStop(at=datetime(2026, 10, 5))
+    at = datetime(2026, 10, 5, tzinfo=UTC)
+    deadline = DeadlineStop(at=at)
+    assert stop_reason([deadline], [], 0, now=at)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"window_minutes": 300},
+        {"limit_id": "other"},
+        {"used_percent": 80.1},
+        {"resets_at": None},
+    ],
+)
+def test_automation_trigger_requires_matching_reset_and_remaining_usage(change: dict) -> None:
+    from datetime import timedelta
+
+    from tokendrain.notifications import UsageTrigger
+
+    now = datetime(2026, 10, 5, tzinfo=UTC)
+    window = UsageWindow(
+        limit_id="codex",
+        window_minutes=10080,
+        used_percent=80,
+        resets_at=now + timedelta(hours=12),
+        observed_at=now,
+    )
+    trigger = UsageTrigger(limit_id="codex", min_remaining_percent=20)
+    assert trigger.matches(window, now)
+    assert not trigger.matches(window.model_copy(update=change), now)

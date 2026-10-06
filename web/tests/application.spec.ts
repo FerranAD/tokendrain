@@ -97,6 +97,8 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
       '/projects/new-project/executions': [],
       '/runs': [],
       '/schedules': [],
+      '/automations': [],
+      '/automation-occurrences': [],
       '/usage': windows,
       '/auth/openai': { connected: true, method: 'import', account_label: 'user@example.test' },
       '/auth/openai/models': [
@@ -244,6 +246,12 @@ test('GitHub access modes and workflow toggle save a simple repository binding',
   await page.getByRole('button', { name: 'GitHub', exact: true }).click();
   await page.getByRole('combobox', { name: 'Repository', exact: true }).fill('octocat/telescope');
   await expect(page.getByRole('radio', { name: 'Pull requests', exact: true })).toBeChecked();
+  await expect(
+    page.getByRole('radio', { name: 'Pull requests', exact: true }),
+  ).toHaveAccessibleDescription(/Updating the default branch requires a pull request/);
+  await expect(
+    page.getByText(/GitHub enforces these settings through GitHub App token permissions/),
+  ).toBeVisible();
   await page.getByRole('checkbox', { name: 'Allow workflow file changes' }).check();
   await page.getByRole('button', { name: 'Save repository access' }).click();
   await expect(page.getByRole('status')).toContainText('Repository integration saved');
@@ -670,6 +678,12 @@ test('project creation saves the model and GitHub integration together', async (
   await page.getByLabel('Default model', { exact: true }).selectOption('codex-other');
   await page.getByLabel('Default reasoning effort', { exact: true }).selectOption('high');
   await page.getByRole('checkbox', { name: 'Attach a GitHub repository' }).check();
+  await expect(
+    page.getByRole('radio', { name: 'Read only', exact: true }),
+  ).toHaveAccessibleDescription(/cannot be published to GitHub/);
+  await expect(
+    page.getByText(/GitHub enforces these settings through GitHub App token permissions/),
+  ).toBeVisible();
   await page.getByRole('combobox', { name: 'Repository', exact: true }).fill('octocat/telescope');
   await page.screenshot({ path: 'test-results/create-project.png', fullPage: true });
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
@@ -957,4 +971,202 @@ test('ntfy settings save reminders and send a test using saved settings', async 
   expect(testCount).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+const automationTemplate = {
+  projects: [{ project_id: 'project-a', model: 'codex-test', reasoning_effort: 'high' }],
+  parallel: true,
+  threshold_mode: 'graceful',
+  stop_conditions: [
+    { kind: 'usage', window_minutes: 10080, used_percent: 100 },
+    { kind: 'provider_limit' },
+    { kind: 'project_completed' },
+  ],
+};
+const automationRule = {
+  id: 'automation-a',
+  name: 'Weekly drain',
+  enabled: true,
+  mode: 'approval',
+  trigger: {
+    window_minutes: 10080,
+    limit_id: null,
+    hours_before_reset: 12,
+    min_remaining_percent: 20,
+  },
+  run_template: automationTemplate,
+};
+function pendingAutomation() {
+  return {
+    id: 'occurrence-a',
+    automation_id: 'automation-a',
+    automation_name: 'Weekly drain',
+    limit_id: 'codex',
+    window_minutes: 10080,
+    resets_at: new Date(Date.now() + 3600000).toISOString(),
+    matched_window: { limit_id: 'codex', window_minutes: 10080, used_percent: 20 },
+    current_usage: windows,
+    run_template: automationTemplate,
+    mode: 'approval',
+    status: 'pending',
+    created_at: stamp,
+    notified_at: stamp,
+    delivery_error: null,
+    last_error: null,
+    run_id: null,
+  };
+}
+
+for (const mode of ['automatic', 'approval'] as const) {
+  test(`create usage automation in ${mode} mode with exhaustion defaults`, async ({ page }) => {
+    const { writes, errors } = await fixture(page);
+    await page.goto('/automations');
+    await expect(page.getByText(/Conditions are checked every 15 minutes/)).toBeVisible();
+    await page.getByRole('button', { name: 'New automation', exact: true }).click();
+    await page.getByLabel('Name', { exact: true }).fill('Spend allowance');
+    await page.getByRole('checkbox', { name: /Package telescope/ }).check();
+    await page.getByLabel('Usage window (minutes)', { exact: true }).fill('720');
+    await page.getByLabel('Minimum remaining (%)', { exact: true }).fill('40');
+    if (mode === 'automatic')
+      await page.getByRole('radio', { name: /^Launch automatically/ }).check();
+    else {
+      await expect(
+        page.getByRole('radio', { name: /^Notify and wait for approval/ }),
+      ).toBeChecked();
+      await expect(page.getByRole('link', { name: 'Notification settings →' })).toBeVisible();
+    }
+    await expect(page.getByLabel('Usage threshold percent').first()).toHaveValue('100');
+    await page.getByRole('button', { name: 'Save automation' }).click();
+    await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible();
+    expect(writes.find((w) => w.path === '/automations')?.body).toMatchObject({
+      name: 'Spend allowance',
+      mode,
+      enabled: true,
+      trigger: {
+        window_minutes: 720,
+        limit_id: null,
+        hours_before_reset: 12,
+        min_remaining_percent: 40,
+      },
+      run_template: {
+        projects: [{ project_id: 'project-a', model: 'codex-test', reasoning_effort: 'medium' }],
+        stop_conditions: [
+          { kind: 'usage', window_minutes: 720, used_percent: 100 },
+          { kind: 'provider_limit' },
+          { kind: 'project_completed' },
+        ],
+      },
+    });
+    expect(errors).toEqual([]);
+  });
+}
+
+test('automation editing retains configuration and shows pending requests and history', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page);
+  const pending = pendingAutomation();
+  await page.route('**/api/v1/automations', (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ json: [automationRule] })
+      : route.fallback(),
+  );
+  await page.route('**/api/v1/automation-occurrences', (route) =>
+    route.fulfill({
+      json: [pending, { ...pending, id: 'old', status: 'launched', run_id: 'run-1234' }],
+    }),
+  );
+  await page.goto('/automations');
+  await expect(page.getByRole('link', { name: 'Review run' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'View run', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByLabel('Minimum remaining (%)', { exact: true })).toHaveValue('20');
+  await expect(page.getByRole('checkbox', { name: /Package telescope/ })).toBeChecked();
+  await page.getByLabel('Name', { exact: true }).fill('Updated drain');
+  await page.getByRole('button', { name: 'Save automation' }).click();
+  await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
+  expect(writes.find((w) => w.path === '/automations/automation-a')?.body).toMatchObject({
+    name: 'Updated drain',
+    run_template: automationTemplate,
+  });
+  expect(errors).toEqual([]);
+});
+
+test('notification deep link survives login and requires explicit authorization', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page, { signedIn: false });
+  const pending = pendingAutomation();
+  await page.route('**/api/v1/automation-occurrences/occurrence-a', (route) =>
+    route.fulfill({ json: pending }),
+  );
+  await page.route('**/api/v1/automation-occurrences/occurrence-a/authorize', (route) =>
+    route.fulfill({ json: { ...pending, status: 'launched', run_id: 'run-1234' } }),
+  );
+  await page.goto('/automation-occurrences/occurrence-a');
+  await page.getByLabel('Administration token').fill('a'.repeat(40));
+  await page.getByRole('button', { name: /Open tokendrain/ }).click();
+  await expect(page.getByRole('button', { name: 'Authorize run', exact: true })).toBeVisible();
+  expect(writes.map((w) => w.path)).toEqual(['/session']);
+  await expect(page.getByText('Package telescope', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Stops at reset with hard interruption/)).toBeVisible();
+  await page.getByRole('button', { name: 'Authorize run', exact: true }).click();
+  await expect(page).toHaveURL(/runs\/run-1234$/);
+  expect(errors).toEqual([]);
+});
+
+test('expired automation requests cannot be authorized', async ({ page }) => {
+  const { writes, errors } = await fixture(page);
+  const expired = { ...pendingAutomation(), resets_at: new Date(Date.now() - 1000).toISOString() };
+  await page.route('**/api/v1/automation-occurrences/occurrence-a', (route) =>
+    route.fulfill({ json: expired }),
+  );
+  await page.goto('/automation-occurrences/occurrence-a');
+  await expect(
+    page.getByText('This request expired at reset. It cannot launch a run.'),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Authorize run' })).toHaveCount(0);
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('automation admission errors keep the review page available for explicit retry', async ({
+  page,
+}) => {
+  const { errors } = await fixture(page);
+  const pending = pendingAutomation();
+  await page.route('**/api/v1/automation-occurrences/occurrence-a', (route) =>
+    route.fulfill({ json: pending }),
+  );
+  await page.route('**/api/v1/automation-occurrences/occurrence-a/authorize', (route) =>
+    route.fulfill({
+      status: 409,
+      json: { detail: 'Project already has an active or queued execution' },
+    }),
+  );
+  await page.goto('/automation-occurrences/occurrence-a');
+  await page.getByRole('button', { name: 'Authorize run' }).click();
+  await expect(page.getByRole('alert')).toContainText('active or queued');
+  await expect(page.getByRole('button', { name: 'Authorize run' })).toBeEnabled();
+  await expect(page).toHaveURL(/automation-occurrences\/occurrence-a$/);
+  expect(errors).toEqual([]);
+});
+
+test('dismissing an approval retains it in history without launching a run', async ({ page }) => {
+  const { writes, errors } = await fixture(page);
+  let item = pendingAutomation();
+  await page.route('**/api/v1/automation-occurrences/occurrence-a', (route) =>
+    route.fulfill({ json: item }),
+  );
+  await page.route('**/api/v1/automation-occurrences/occurrence-a/dismiss', (route) => {
+    writes.push({ path: '/automation-occurrences/occurrence-a/dismiss', method: 'POST', body: {} });
+    item = { ...item, status: 'dismissed' };
+    return route.fulfill({ json: item });
+  });
+  await page.goto('/automation-occurrences/occurrence-a');
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Authorize run' })).toHaveCount(0);
+  await expect(page.getByText('dismissed', { exact: true })).toBeVisible();
+  expect(writes.map((w) => w.path)).toEqual(['/automation-occurrences/occurrence-a/dismiss']);
+  expect(errors).toEqual([]);
 });

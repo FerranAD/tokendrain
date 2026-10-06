@@ -25,7 +25,7 @@ tokendrain is a self-hosted NixOS service that runs Codex on your software proje
 - Stops at your usage thresholds, with either a short wrap-up or hard interruption.
 - Lets each project use GitHub with Read only, Pull requests, or Direct write access.
 - Keeps generated work in the Workspace even without GitHub. Browse files and previews while idle; download individual files, folders as ZIP, or the whole Workspace as ZIP.
-- Starts Runs now or on timezone-aware cron schedules.
+- Starts Runs now, on timezone-aware cron schedules, or automatically before usage resets.
 
 ## Projects, tasks, Runs
 
@@ -172,6 +172,10 @@ Give it work. Let it chew through the usage you'd otherwise leave on the table.
 ## Usage reminders
 
 Configure **Settings → Notifications** to send reminders through ntfy.sh or your own ntfy server. For example, get an alert when your weekly reset is within 12 hours and at least 80% of your allowance remains. Rules use the provider's observed windows, and reminders do not launch Runs. See [ntfy setup and delivery behavior](docs/notifications.md).
+
+## Usage automations
+
+Use **Automations** to launch a saved Run when a usage reset is within a chosen number of hours and enough allowance remains. Launch automatically, or receive an ntfy notification and authorize the Run on the website. Rules are checked every **15 minutes** and launch once per matching reset window. Runs default to exhausting the allowance and stop at reset to avoid spending the new window. See [usage automations](docs/automations.md).
 
 ## The VM is the security boundary
 

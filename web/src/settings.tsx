@@ -9,6 +9,10 @@ import type { GitHubStatus, OpenAIStatus, ProjectGitHub, SystemInfo } from './ty
 import { ActionNotice, Badge, ErrorNotice, Loading, PageTitle } from './ui';
 
 export function SettingsPage() {
+  useEffect(() => {
+    if (window.location.hash === '#notifications')
+      document.getElementById('notifications')?.scrollIntoView();
+  }, []);
   return (
     <>
       <PageTitle title="Settings" />

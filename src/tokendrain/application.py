@@ -12,6 +12,7 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tokendrain.auth.openai import OpenAIAuthManager
+from tokendrain.automations import AutomationService
 from tokendrain.config import Settings
 from tokendrain.credentials.store import EncryptedFileCredentialStore, load_master_key
 from tokendrain.db.engine import migrate, open_database
@@ -61,6 +62,7 @@ class Application:
     lock: BinaryIO
     started_at: float
     notifications: NtfyService
+    automations: AutomationService
     task: asyncio.Task[None] | None = None
     probe_lock: asyncio.Lock | None = None
     probe_cache: dict[str, object] | None = None
@@ -161,6 +163,20 @@ class Application:
                     await account_probe(app)
                 return await runs.latest_usage()
 
+            async def approval_usage() -> list[UsageWindow]:
+                from tokendrain.account_metadata import account_probe
+
+                result = await account_probe(app, force=True)
+                if result.get("usage_error") or not result.get("usage"):
+                    raise ValueError("Cannot refresh usage. Check the Codex connection and retry.")
+                return await runs.latest_usage()
+
+            notifications = NtfyService(
+                sessions, credentials, http, settings.public_url, notification_usage
+            )
+            automations = AutomationService(
+                sessions, runs, events, notifications, notification_usage, approval_usage
+            )
             app = cls(
                 settings,
                 engine,
@@ -178,7 +194,8 @@ class Application:
                 tokens,
                 lock,
                 time.monotonic(),
-                NtfyService(sessions, credentials, http, settings.public_url, notification_usage),
+                notifications,
+                automations,
                 probe_lock=asyncio.Lock(),
             )
             if overrides.start_workers:
@@ -205,6 +222,7 @@ class Application:
             group.create_task(self.supervisor.serve(), name="run-supervisor")
             group.create_task(self.scheduler.serve(), name="scheduler")
             group.create_task(self.notifications.serve(), name="ntfy-notifications")
+            group.create_task(self.automations.serve(), name="usage-automations")
             group.create_task(self.housekeeping(), name="event-retention")
 
     async def housekeeping(self) -> None:

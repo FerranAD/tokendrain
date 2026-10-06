@@ -20,6 +20,7 @@ from tokendrain.credentials import EncryptedFileCredentialStore, SecretRedactor
 from tokendrain.db.engine import migrate, open_database
 from tokendrain.db.models import Event, Run, Schedule
 from tokendrain.domain import (
+    DeadlineStop,
     ElapsedStop,
     ExecutionState,
     ProjectConfig,
@@ -560,3 +561,87 @@ async def test_cancellation_preserves_previous_valid_checkpoint(harness: Harness
     assert result["termination_reason"] == "user_cancelled"
     assert result["checkpoint_from_execution_id"] == execution
     assert "Cancelled by user" not in result["report"]["blockers"]
+
+
+async def test_reset_deadline_interrupts_active_work_without_wrap_up(harness: Harness) -> None:
+    deadline = DeadlineStop(at=utcnow() + timedelta(hours=1))
+    _, run_id, execution_id = await harness.run([deadline])
+    harness.session.wait_until_cancel = True
+    work = asyncio.create_task(harness.supervisor.execute(execution_id, asyncio.Event()))
+    await asyncio.wait_for(harness.session.started.wait(), 3)
+    # Advance the host clock across reset after substantive work has started.
+    from unittest.mock import patch
+
+    with patch("tokendrain.domain.utcnow", return_value=deadline.at):
+        await asyncio.wait_for(work, 3)
+    execution = (await harness.runs.get(run_id))["executions"][0]
+    assert len(harness.session.prompts) == 1
+    assert execution["status"] == "stopped"
+    assert execution["termination_reason"] == "reset_deadline"
+    assert execution["threshold_mode"] == "hard" and execution["interrupted"]
+    assert not harness.vm.handles and harness.session.closed
+
+
+async def test_reset_deadline_interrupts_graceful_wrap_up(harness: Harness) -> None:
+    deadline = DeadlineStop(at=utcnow() + timedelta(hours=1))
+    _, run_id, execution_id = await harness.run(
+        [
+            UsageStop(window_minutes=300, used_percent=70),
+            deadline,
+        ]
+    )
+    harness.session.windows = [[UsageWindow(limit_id="codex", window_minutes=300, used_percent=71)]]
+    harness.session.wait_until_cancel = True
+    work = asyncio.create_task(harness.supervisor.execute(execution_id, asyncio.Event()))
+    await asyncio.wait_for(harness.session.started.wait(), 3)
+    assert "Stop new substantive work" in harness.session.prompts[0]
+    from unittest.mock import patch
+
+    with patch("tokendrain.domain.utcnow", return_value=deadline.at):
+        await asyncio.wait_for(work, 3)
+    execution = (await harness.runs.get(run_id))["executions"][0]
+    assert len(harness.session.prompts) == 1
+    assert execution["status"] == "stopped"
+    assert execution["termination_reason"] == "reset_deadline"
+    assert execution["threshold_mode"] == "hard" and execution["interrupted"]
+    assert not harness.vm.handles
+
+
+async def test_expired_reset_deadline_does_not_boot_a_vm(harness: Harness) -> None:
+    _, run_id, execution_id = await harness.run(
+        [
+            DeadlineStop(at=utcnow() - timedelta(seconds=1)),
+        ]
+    )
+    await harness.supervisor.execute(execution_id, asyncio.Event())
+    execution = (await harness.runs.get(run_id))["executions"][0]
+    assert harness.vm.starts == 0 and not harness.session.prompts
+    assert execution["status"] == "stopped" and execution["termination_reason"] == "reset_deadline"
+
+
+async def test_dispatcher_expires_queued_run_even_when_capacity_is_full(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, run_id, execution_id = await harness.run(
+        [
+            DeadlineStop(at=utcnow() - timedelta(seconds=1)),
+        ]
+    )
+    harness.supervisor.settings.max_concurrency = 0
+    finished = asyncio.Event()
+    original_finish = harness.supervisor.finish_run
+
+    async def finish(current_run: str) -> None:
+        await original_finish(current_run)
+        finished.set()
+
+    monkeypatch.setattr(harness.supervisor, "finish_run", finish)
+    worker = asyncio.create_task(harness.supervisor.serve())
+    try:
+        await asyncio.wait_for(finished.wait(), 3)
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+    execution = (await harness.runs.get(run_id))["executions"][0]
+    assert harness.vm.starts == 0 and execution["termination_reason"] == "reset_deadline"

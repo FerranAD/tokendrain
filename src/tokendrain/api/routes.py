@@ -34,6 +34,7 @@ from tokendrain.api.schemas import (
 )
 from tokendrain.application import Application
 from tokendrain.auth.probe import requires_reauthentication
+from tokendrain.automations import AutomationInput
 from tokendrain.codex.rpc import RpcError
 from tokendrain.db.models import (
     Event,
@@ -518,6 +519,54 @@ async def delete_schedule(request: Request, schedule_id: str) -> Response:
         await db.delete(row)
     await services.events.publish("schedule.deleted")
     return Response(status_code=204)
+
+
+@router.get(API + "/automations")
+async def automations(request: Request) -> Any:
+    return encoded(await current(request).automations.list_automations())
+
+
+@router.get(API + "/automations/{automation_id}")
+async def automation(request: Request, automation_id: str) -> Any:
+    return encoded(await current(request).automations.get(automation_id))
+
+
+@router.post(API + "/automations", status_code=201)
+async def create_automation(request: Request, body: AutomationInput) -> Any:
+    return encoded(await current(request).automations.save(body))
+
+
+@router.patch(API + "/automations/{automation_id}")
+async def update_automation(request: Request, automation_id: str, body: dict[str, Any]) -> Any:
+    return encoded(await current(request).automations.save(body, automation_id))
+
+
+@router.delete(API + "/automations/{automation_id}", status_code=204)
+async def delete_automation(request: Request, automation_id: str) -> Response:
+    await current(request).automations.delete(automation_id)
+    return Response(status_code=204)
+
+
+@router.get(API + "/automation-occurrences")
+async def automation_occurrences(request: Request, automation_id: str | None = None) -> Any:
+    return encoded(await current(request).automations.occurrences(automation_id))
+
+
+@router.get(API + "/automation-occurrences/{occurrence_id}")
+async def automation_occurrence(request: Request, occurrence_id: str) -> Any:
+    return encoded(await current(request).automations.occurrence(occurrence_id))
+
+
+@router.post(API + "/automation-occurrences/{occurrence_id}/authorize")
+async def authorize_automation(request: Request, occurrence_id: str) -> Any:
+    services = current(request)
+    ready(services)
+    return encoded(await services.automations.authorize(occurrence_id))
+
+
+@router.post(API + "/automation-occurrences/{occurrence_id}/dismiss")
+async def dismiss_automation(request: Request, occurrence_id: str) -> Any:
+    return encoded(await current(request).automations.dismiss(occurrence_id))
 
 
 @router.get(API + "/projects/{project_id}/secrets")

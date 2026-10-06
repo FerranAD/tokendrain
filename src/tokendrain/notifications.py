@@ -23,16 +23,14 @@ log = logging.getLogger(__name__)
 TOKEN = "ntfy-access-token"
 
 
-class UsageAlert(Boundary):
-    id: str = Field(default_factory=lambda: str(uuid4()), pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+class UsageTrigger(Boundary):
     window_minutes: int = Field(default=10080, ge=1, le=525600)
     limit_id: str | None = Field(default=None, max_length=200)
     hours_before_reset: float = Field(default=12, gt=0, le=168, allow_inf_nan=False)
     min_remaining_percent: float = Field(default=80, ge=0, le=100, allow_inf_nan=False)
-    enabled: bool = True
 
     def matches(self, window: UsageWindow, now: datetime) -> bool:
-        if not self.enabled or window.window_minutes != self.window_minutes:
+        if window.window_minutes != self.window_minutes:
             return False
         if self.limit_id and window.limit_id != self.limit_id:
             return False
@@ -47,6 +45,14 @@ class UsageAlert(Boundary):
             and 0 < remaining <= self.hours_before_reset * 3600
             and max(0, 100 - window.used_percent) >= self.min_remaining_percent
         )
+
+
+class UsageAlert(UsageTrigger):
+    id: str = Field(default_factory=lambda: str(uuid4()), pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+    enabled: bool = True
+
+    def matches(self, window: UsageWindow, now: datetime) -> bool:
+        return self.enabled and super().matches(window, now)
 
 
 class NtfyConfig(Boundary):
@@ -148,7 +154,15 @@ class NtfyService:
                 "ntfy", value.model_dump(mode="json", exclude={"access_token", "clear_token"})
             )
 
-    async def _publish(self, config: NtfyConfig, message: str, *, test: bool = False) -> None:
+    async def _publish(
+        self,
+        config: NtfyConfig,
+        message: str,
+        *,
+        test: bool = False,
+        title: str | None = None,
+        click: str | None = None,
+    ) -> None:
         if not config.topic:
             raise ValueError("Save a notification topic before sending a test")
         token = await self.credentials.get(TOKEN)
@@ -158,9 +172,10 @@ class NtfyService:
                 config.server_url + "/",
                 json={
                     "topic": config.topic,
-                    "title": "Tokendrain test" if test else "Codex allowance resets soon",
+                    "title": title
+                    or ("Tokendrain test" if test else "Codex allowance resets soon"),
                     "message": message,
-                    "click": self.public_url,
+                    "click": click or self.public_url,
                     "tags": ["test_tube" if test else "hourglass_flowing_sand"],
                 },
                 headers=headers,
@@ -173,6 +188,15 @@ class NtfyService:
             raise ValueError(
                 "ntfy delivery failed. Check server, topic and access token."
             ) from None
+
+    async def approval(self, occurrence_id: str, name: str, message: str) -> None:
+        async with self.lock:
+            await self._publish(
+                await self.config(),
+                message,
+                title=f"Authorize automation: {name}",
+                click=self.public_url.rstrip("/") + "/automation-occurrences/" + occurrence_id,
+            )
 
     async def test(self) -> None:
         async with self.lock:

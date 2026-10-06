@@ -29,3 +29,11 @@ The daemon checks every minute, including when projects are idle, and refreshes 
 Successful delivery is recorded per destination, rule settings, limit, and reset timestamp, so subsequent checks and daemon restarts do not resend it. A new reset window can send again. Changing a rule or its destination can also send a new reminder. A crash after ntfy accepts a message but before the local delivery record is committed can result in a duplicate; delivery is not guaranteed to be exactly once.
 
 The notification opens your configured `services.tokendrain.web.publicUrl`. It only reminds you: it does not launch or authorize runs. Provider usage and resets are observations, not guarantees of remaining usable quota.
+
+## Run approvals
+
+Under **Automations**, choose **Notify and wait for approval** to attach a usage condition to a saved run. Automation checks happen at daemon startup and every **15 minutes**. When the condition matches, Tokendrain saves a pending request and sends a notification to the destination configured here, even if reminder-only notifications are disabled.
+
+Open the notification to review the projects, models, stop conditions, and current usage, then select **Authorize run**. Opening the link does not launch anything. Authorization refreshes usage and requires the enabled rule to still match. Requests expire at reset; editing, pausing, or deleting the rule cancels pending requests. Dismissing a request prevents another request for that same rule and reset window.
+
+Failed notification delivery retries on the next automation check. The request remains available on the Automations page. Successful notification delivery is recorded across restarts, although a crash between delivery and recording can produce a duplicate notification. Authorization and run creation are transactionally deduplicated.

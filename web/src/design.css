@@ -2346,3 +2346,12 @@ summary:hover {
     scroll-behavior: auto !important;
   }
 }
+
+.automation-occurrence {
+  padding: 1rem 0;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.automation-occurrence + .automation-occurrence {
+  border-top: 1px solid var(--line);
+}

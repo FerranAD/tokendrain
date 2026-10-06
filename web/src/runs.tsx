@@ -2,7 +2,7 @@ import { Icon } from './icons';
 import { ModelSelector } from './model-selector';
 import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
 import { ActivityTimeline } from './activity';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { mutate, useAction, useEvents, useResource } from './api';
 import type {
@@ -205,6 +205,7 @@ export function RunBuilder({
   onSubmit,
   submitLabel = 'Save',
   draftContext,
+  usageTarget,
 }: {
   initial?: RunTemplate;
   selectedProject?: string;
@@ -212,6 +213,7 @@ export function RunBuilder({
   onSubmit: (template: RunTemplate, saved: () => void) => Promise<void>;
   submitLabel?: string;
   draftContext?: unknown;
+  usageTarget?: { window_minutes: number; limit_id: string | null };
 }) {
   const projects = useResource<Project[]>('/projects');
   const usage = useResource<UsageWindow[]>('/usage');
@@ -219,6 +221,31 @@ export function RunBuilder({
   const [conditions, setConditions] = useState<StopCondition[]>(
     initial?.stop_conditions ?? [{ kind: 'provider_limit' }, { kind: 'project_completed' }],
   );
+  const previousTarget = useRef(usageTarget);
+  useEffect(() => {
+    const previous = previousTarget.current;
+    if (
+      usageTarget &&
+      previous &&
+      (previous.window_minutes !== usageTarget.window_minutes ||
+        previous.limit_id !== usageTarget.limit_id)
+    ) {
+      setConditions((old) =>
+        old.map((condition) =>
+          condition.kind === 'usage' &&
+          condition.window_minutes === previous.window_minutes &&
+          (condition.limit_id || null) === previous.limit_id
+            ? {
+                ...condition,
+                window_minutes: usageTarget.window_minutes,
+                limit_id: usageTarget.limit_id || undefined,
+              }
+            : condition,
+        ),
+      );
+    }
+    previousTarget.current = usageTarget;
+  }, [usageTarget?.window_minutes, usageTarget?.limit_id]);
   const [thresholdMode, setThresholdMode] = useState<'graceful' | 'hard'>(
     initial?.threshold_mode ?? 'graceful',
   );
@@ -442,6 +469,29 @@ export function RunBuilder({
                     {conditionLabel(condition)}{' '}
                     <span className="muted small">(not currently observed)</span>
                   </span>
+                  {condition.kind === 'usage' && (
+                    <label className="number-inline">
+                      <span className="sr-only">Usage threshold percent</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        step={0.1}
+                        required
+                        value={condition.used_percent}
+                        onChange={(e) =>
+                          setConditions((old) =>
+                            old.map((item) =>
+                              item === condition
+                                ? { ...condition, used_percent: Number(e.target.value) }
+                                : item,
+                            ),
+                          )
+                        }
+                      />
+                      <span>% used</span>
+                    </label>
+                  )}
                   <button
                     type="button"
                     className="quiet"
@@ -648,6 +698,14 @@ export function RunPage({ id }: { id: string }) {
             <dd>{data.executions.length}</dd>
           </div>
         </dl>
+        {data.automation_occurrence_id && (
+          <p className="small">
+            Launched by{' '}
+            <Link href={`/automation-occurrences/${data.automation_occurrence_id}`}>
+              {data.automation_name || 'Automation'}
+            </Link>
+          </p>
+        )}
         <div className="stop-chips">
           <span className="small muted">Stop policy</span>
           <span className="chip">

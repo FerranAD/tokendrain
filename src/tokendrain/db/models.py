@@ -111,6 +111,50 @@ class Schedule(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+class Automation(Base):
+    __tablename__ = "automations"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(200))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    trigger: Mapped[dict[str, Any]] = mapped_column(JSON)
+    mode: Mapped[str] = mapped_column(String(24))
+    run_template: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class AutomationOccurrence(Base):
+    __tablename__ = "automation_occurrences"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    automation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("automations.id", ondelete="SET NULL")
+    )
+    automation_name: Mapped[str] = mapped_column(String(200))
+    limit_id: Mapped[str] = mapped_column(String(200))
+    window_minutes: Mapped[int] = mapped_column(Integer)
+    resets_at: Mapped[datetime] = mapped_column(DateTime)
+    matched_window: Mapped[dict[str, Any]] = mapped_column(JSON)
+    run_template: Mapped[dict[str, Any]] = mapped_column(JSON)
+    mode: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    delivery_error: Mapped[str | None] = mapped_column(Text)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+    __table_args__ = (
+        Index(
+            "uq_automation_occurrence",
+            "automation_id",
+            "limit_id",
+            "window_minutes",
+            "resets_at",
+            unique=True,
+        ),
+    )
+
+
 class Event(Base):
     __tablename__ = "events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

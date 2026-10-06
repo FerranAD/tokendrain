@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { api, EventsProvider, mutate, useAction, useResource, useEvents } from './api';
 import { NewProject, ProjectCards, ProjectPage, ProjectsPage } from './projects';
 import { PrepareRunPage, RunPage, RunsPage, RunTable, SchedulesPage } from './runs';
+import { AutomationsPage, AutomationApprovalPage } from './automations';
 import { SettingsPage } from './settings';
 import type { Project, Run, Schedule, SystemInfo, UsageWindow } from './types';
 import {
@@ -157,6 +158,7 @@ const navigation = [
   { path: '/projects', label: 'Projects', icon: 'folder' },
   { path: '/runs', label: 'Runs', icon: 'play' },
   { path: '/schedules', label: 'Schedules', icon: 'clock' },
+  { path: '/automations', label: 'Automations', icon: 'agent' },
   { path: '/settings', label: 'Settings', icon: 'settings' },
 ];
 
@@ -178,6 +180,9 @@ function Shell({ path, onSignOut }: { path: string; onSignOut: () => void }) {
       <PrepareRunPage key={path} selectedProject={url.searchParams.get('project') ?? undefined} />
     );
   else if (route === '/schedules') content = <SchedulesPage />;
+  else if (route === '/automations') content = <AutomationsPage />;
+  else if (/^\/automation-occurrences\/[^/]+$/.test(route))
+    content = <AutomationApprovalPage key={route} id={route.split('/')[2]} />;
   else if (route === '/settings') content = <SettingsPage />;
   else
     content = (
