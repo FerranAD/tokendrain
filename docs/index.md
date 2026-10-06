@@ -1,76 +1,37 @@
 ---
 hide:
-  - navigation
   - toc
 ---
 
-<div class="td-hero" markdown>
+# Use the tokens you're paying for.
 
-<p class="td-eyebrow">SELF-HOSTED · NIXOS · FIRECRACKER</p>
+You're already paying for a Codex subscription. The weekly usage limit resets whether you use it or not. Tokendrain runs Codex on your projects to consume the usage you'd otherwise leave behind.
 
-# Give your leftover allowance a job.
+Give it approved tasks, choose how far to drain your usage limits, and let it run. Work stops when the tasks finish, the agent gets blocked, or your limits are reached.
 
-Autonomous Codex work, on your terms. Approve the tasks, choose the limits, and keep a workspace that is ready for the next Run.
-
-[Get started](getting-started.md){ .md-button .md-button--primary }
-[How it works](workflow.md){ .md-button }
-
-<div class="td-wordmark">
-  <img class="td-logo-light" src="assets/tokendrain-logo-horizontal.png" alt="tokendrain" width="440">
-  <img class="td-logo-dark" src="assets/tokendrain-logo-horizontal-dark.png" alt="tokendrain" width="440">
-</div>
-
-</div>
-
-<div class="td-screenshot" markdown>
+[Install on NixOS](getting-started.md){ .md-button .md-button--primary }
+[NixOS options](nixos-options.md){ .md-button }
 
 ![The tokendrain dashboard with usage, Runs, projects, and schedules](assets/dashboard.png)
 
-</div>
+## How it works
 
-<div class="td-grid" markdown>
+- Create projects and approve tasks in the Kanban board. Codex resumes In progress work, then takes Todo tasks. Its new ideas stay in Backlog until you approve them.
+- Each project runs in an isolated Firecracker VM. Source files, installed tools, caches, and progress persist between runs.
+- Choose usage thresholds or run until the provider's limit is exhausted. Start now, save a cron schedule, or [launch automatically before a reset](automations.md).
+- Connect GitHub if you want changes published. You can also browse or download the workspace directly.
 
-<div class="td-card" markdown>
+## Documentation
 
-### Your tasks. Your call.
-
-Agents work In progress and Todo. Discoveries stay in Backlog until you approve them.
-
-[Plan the work →](workflow.md)
-
-</div>
-
-<div class="td-card" markdown>
-
-### A persistent development machine.
-
-Each execution boots a Firecracker VM. The entire project machine persists, while Tokendrain control software is current at every Run and managed credentials are temporary.
-
-[Understand persistence →](microvms.md)
-
-</div>
-
-<div class="td-card" markdown>
-
-### Know when to stop.
-
-Set usage thresholds and runtime limits. Choose a bounded wrap-up or hard interruption when a threshold is observed.
-
-[Choose your limits →](usage-limits.md)
-
-</div>
-
-</div>
-
-## Find your next step
-
-| You want to… | Start here |
+| What you need | Read |
 | --- | --- |
-| Install tokendrain on a NixOS host | [Installation and first Run](getting-started.md) |
-| Connect your Codex account | [Authentication and usage](openai-auth.md) |
+| Install and start a run | [Installation and first Run](getting-started.md) |
+| Configure the NixOS service | [All module options](nixos-options.md) |
+| Connect Codex | [Account setup](openai-auth.md) |
+| Choose how much usage to consume | [Usage limits and stopping](usage-limits.md) |
+| Run before the weekly reset | [Automations](automations.md) · [ntfy notifications](notifications.md) |
+| Manage projects and approved work | [Projects and tasks](workflow.md) |
 | Give a project GitHub access | [GitHub App setup](github-app.md) |
-| Back up or restore project state | [Security and backups](security.md) · [MicroVM operations](microvms.md) |
-| Work on tokendrain itself | [Development guide](development.md) · [Architecture](architecture.md) |
-
-!!! note "Before the first Run"
-    The supported host is **NixOS with KVM**. Agents have root inside their VMs and run commands without approval prompts. Read the [security model](security.md) before supplying credentials.
+| Manage VM resources and storage | [MicroVM operations](microvms.md) |
+| Back up or restore | [Security and backups](security.md) |
+| Work on Tokendrain | [Development guide](development.md) · [Architecture](architecture.md) |

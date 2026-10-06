@@ -1,3 +1,4 @@
+import { NumberInput } from './number-input';
 import { Icon } from './icons';
 import { WorkspacePanel } from './workspace';
 import { Kanban } from './kanban';
@@ -5,7 +6,7 @@ import { ModelSelector } from './model-selector';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { mutate, useAction, useResource } from './api';
-import type { Execution, Project, ProjectGitHub, Secret, StorageInfo } from './types';
+import type { Execution, OpenAIStatus, Project, ProjectGitHub, Secret, StorageInfo } from './types';
 import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
 import {
   ActionNotice,
@@ -85,6 +86,7 @@ export function ProjectsPage() {
 }
 
 export function NewProject({ close }: { close: () => void }) {
+  const account = useResource<OpenAIStatus>('/auth/openai');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [model, setModel] = useState('');
@@ -156,6 +158,13 @@ export function NewProject({ close }: { close: () => void }) {
         </label>
         <fieldset className="initial-tasks">
           <legend>Agent defaults</legend>
+          <ErrorNotice error={account.error} />
+          {account.data?.connected === false && (
+            <div className="callout">
+              Connect your Codex account in <Link href="/settings#openai">Settings</Link> before
+              running this project.
+            </div>
+          )}
           <ModelSelector
             defaults
             model={model}
@@ -589,13 +598,12 @@ function StoragePanel({ id }: { id: string }) {
         <p className="muted small">Storage can grow; shrinking is unsupported.</p>
         <label>
           New capacity, GiB
-          <input
-            type="number"
+          <NumberInput
             required
             min={currentSize ?? 1}
             max={4096}
             value={size}
-            onChange={(e) => setSize(Number(e.target.value))}
+            onValueChange={(value) => setSize(value)}
           />
         </label>
         <button disabled={action.busy || currentSize === undefined}>Resize</button>

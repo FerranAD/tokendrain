@@ -8,7 +8,7 @@
 
 **You're already paying OpenAI for the tokens. Let's use the fucking tokens.**
 
-Your Codex usage windows reset whether you use them or not. tokendrain gives the leftovers a job: software work you've approved, running unsupervised until it finishes, gets blocked, or reaches the limits you choose.
+Your Codex subscription's weekly limit resets whether you use it or not. tokendrain runs Codex on software work you've approved to consume the usage you'd otherwise leave behind. It keeps working until the tasks finish, it gets blocked, or it reaches your chosen limits.
 
 ![tokendrain dashboard showing usage windows, an active Run, projects, and schedules](docs/assets/dashboard.png)
 
@@ -157,7 +157,7 @@ ssh -N -L 8742:127.0.0.1:8742 your-nixos-host
 
 Behind VPN or reverse-proxy authentication, you can use `services.tokendrain.auth.mode = "none"`. For an HTTPS reverse proxy, set `services.tokendrain.web.publicUrl` to its browser-facing URL and keep the listener private.
 
-Back up the encryption key at `/var/lib/tokendrain-keys/master.key` with your application data. You can supply your own through `masterKeyFile`; see [security and backups](docs/security.md). See [MicroVM operations](docs/microvms.md) for disk sizing and host resource limits.
+Back up the encryption key at `/var/lib/tokendrain-keys/master.key` with your application data. You can supply your own through `masterKeyFile`; see [security and backups](docs/security.md). See the [complete NixOS option reference](docs/nixos-options.md) for service configuration and [MicroVM operations](docs/microvms.md) for disk sizing and host resource limits.
 
 ## First Run
 
@@ -171,11 +171,11 @@ Give it work. Let it chew through the usage you'd otherwise leave on the table.
 
 ## Usage reminders
 
-Configure **Settings → Notifications** to send reminders through ntfy.sh or your own ntfy server. For example, get an alert when your weekly reset is within 12 hours and at least 80% of your allowance remains. Rules use the provider's observed windows, and reminders do not launch Runs. See [ntfy setup and delivery behavior](docs/notifications.md).
+Configure **Settings → Notifications** to send reminders through ntfy.sh or your own ntfy server. For example, get an alert when your weekly reset is within 12 hours and at least 80% of your usage limit remains available. Rules use the provider's observed windows, and reminders do not launch Runs. See [ntfy setup and delivery behavior](docs/notifications.md).
 
 ## Usage automations
 
-Use **Automations** to launch a saved Run when a usage reset is within a chosen number of hours and enough allowance remains. Launch automatically, or receive an ntfy notification and authorize the Run on the website. Rules are checked every **15 minutes** and launch once per matching reset window. Runs default to exhausting the allowance and stop at reset to avoid spending the new window. See [usage automations](docs/automations.md).
+Use **Automations** to launch a saved Run when a usage reset is within a chosen number of hours and enough usage remains available. Launch automatically, or receive an ntfy notification and authorize the Run on the website. Rules are checked every **15 minutes** and launch once per matching reset window. Runs default to exhausting the usage and stop at reset to avoid spending the new window. See [usage automations](docs/automations.md).
 
 ## The VM is the security boundary
 

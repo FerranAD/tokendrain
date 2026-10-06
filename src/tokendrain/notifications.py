@@ -173,7 +173,7 @@ class NtfyService:
                 json={
                     "topic": config.topic,
                     "title": title
-                    or ("Tokendrain test" if test else "Codex allowance resets soon"),
+                    or ("Tokendrain test" if test else "Codex usage limit resets soon"),
                     "message": message,
                     "click": click or self.public_url,
                     "tags": ["test_tube" if test else "hourglass_flowing_sand"],
@@ -254,7 +254,7 @@ class NtfyService:
                             config,
                             f"Your {label} limit ({window.limit_id}) resets in {hours:.1f}h "
                             f"and you still have {max(0, 100 - window.used_percent):.0f}% "
-                            "of your allowance remaining.",
+                            "of your usage limit remaining.",
                         )
                         delivered[key] = window.resets_at.timestamp()
                         state["last_sent_at"] = now.isoformat()

@@ -19,10 +19,10 @@ Add one or more rules and enable usage reminders. For example:
 | --- | --- |
 | Usage window | `10080` minutes (weekly) |
 | Reset within | `12` hours |
-| Minimum remaining allowance | `80` percent |
+| Minimum remaining usage | `80` percent |
 | Limit ID | Empty to match any limit with that duration |
 
-Both conditions must match: the reset is within the chosen time and at least the configured percentage remains. Remaining allowance means `max(0, 100 − used_percent)`: 20% used means 80% remaining. A weekly rule only matches a provider window whose reported duration is 10080 minutes; short windows are not inferred from primary/secondary labels. Use another duration for other windows, and optionally restrict a rule to a limit ID shown in usage observations.
+Both conditions must match: the reset is within the chosen time and at least the configured percentage remains. Remaining usage means `max(0, 100 − used_percent)`: 20% used means 80% remaining. A weekly rule only matches a provider window whose reported duration is 10080 minutes; short windows are not inferred from primary/secondary labels. Use another duration for other windows, and optionally restrict a rule to a limit ID shown in usage observations.
 
 The daemon checks every minute, including when projects are idle, and refreshes account metadata without starting inference when live usage is unavailable. Observations older than five minutes, missing reset times, and already expired windows cannot trigger a reminder. An unavailable Codex connection or ntfy server is retried on subsequent checks. Disable individual rules or the whole integration to pause reminders.
 

@@ -1,3 +1,4 @@
+import { NumberInput } from './number-input';
 import { ThemeControl } from './theme';
 import { NotificationSettings } from './notifications';
 import { Icon } from './icons';
@@ -10,8 +11,8 @@ import { ActionNotice, Badge, ErrorNotice, Loading, PageTitle } from './ui';
 
 export function SettingsPage() {
   useEffect(() => {
-    if (window.location.hash === '#notifications')
-      document.getElementById('notifications')?.scrollIntoView();
+    const section = window.location.hash.slice(1);
+    if (section) document.getElementById(section)?.scrollIntoView();
   }, []);
   return (
     <>
@@ -391,47 +392,43 @@ function SystemForm({ system }: { system: SystemInfo }) {
       <div className="form-grid four">
         <label>
           Concurrency
-          <input
-            type="number"
+          <NumberInput
             min={1}
             max={64}
             required
             value={concurrency}
-            onChange={(e) => setConcurrency(Number(e.target.value))}
+            onValueChange={(value) => setConcurrency(value)}
           />
         </label>
         <label>
           vCPUs per VM
-          <input
-            type="number"
+          <NumberInput
             min={1}
             max={32}
             required
             value={vcpus}
-            onChange={(e) => setVcpus(Number(e.target.value))}
+            onValueChange={(value) => setVcpus(value)}
           />
         </label>
         <label>
           Memory per VM, MiB
-          <input
-            type="number"
+          <NumberInput
             min={512}
             step={128}
-            max={262144}
+            max={131072}
             required
             value={memory}
-            onChange={(e) => setMemory(Number(e.target.value))}
+            onValueChange={(value) => setMemory(value)}
           />
         </label>
         <label>
           Default VM storage, GiB
-          <input
-            type="number"
+          <NumberInput
             min={1}
-            max={16384}
+            max={4096}
             required
             value={disk}
-            onChange={(e) => setDisk(Number(e.target.value))}
+            onValueChange={(value) => setDisk(value)}
           />
         </label>
       </div>

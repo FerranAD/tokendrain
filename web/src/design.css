@@ -1008,6 +1008,18 @@ main {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.task-description {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-card p.task-description.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+.task-expand {
+  margin-right: 8px;
+}
 .task-id {
   font-size: 9px;
   color: var(--subtle);
@@ -1422,6 +1434,7 @@ tbody tr:hover {
   max-height: 680px;
   padding: 8px 0;
   scrollbar-width: thin;
+  overflow-anchor: none;
 }
 .activity-row {
   display: grid;

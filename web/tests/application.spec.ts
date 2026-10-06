@@ -954,7 +954,7 @@ test('ntfy settings save reminders and send a test using saved settings', async 
   await panel.getByLabel('Access token (optional)', { exact: true }).fill('fake-token');
   await panel.getByRole('button', { name: 'Add usage reminder' }).click();
   await panel.getByLabel('Reset within (hours)').fill('10');
-  await panel.getByLabel('At least this much allowance remaining (%)').fill('85');
+  await panel.getByLabel('Minimum remaining usage (%)').fill('85');
   await expect(panel.getByRole('button', { name: 'Send test notification' })).toBeDisabled();
   await panel.getByRole('button', { name: 'Save notifications' }).click();
   await expect(panel.getByText('Notification settings saved.')).toBeVisible();
@@ -1023,7 +1023,7 @@ for (const mode of ['automatic', 'approval'] as const) {
     await page.goto('/automations');
     await expect(page.getByText(/Conditions are checked every 15 minutes/)).toBeVisible();
     await page.getByRole('button', { name: 'New automation', exact: true }).click();
-    await page.getByLabel('Name', { exact: true }).fill('Spend allowance');
+    await page.getByLabel('Name', { exact: true }).fill('Spend usage');
     await page.getByRole('checkbox', { name: /Package telescope/ }).check();
     await page.getByLabel('Usage window (minutes)', { exact: true }).fill('720');
     await page.getByLabel('Minimum remaining (%)', { exact: true }).fill('40');
@@ -1039,7 +1039,7 @@ for (const mode of ['automatic', 'approval'] as const) {
     await page.getByRole('button', { name: 'Save automation' }).click();
     await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible();
     expect(writes.find((w) => w.path === '/automations')?.body).toMatchObject({
-      name: 'Spend allowance',
+      name: 'Spend usage',
       mode,
       enabled: true,
       trigger: {
@@ -1168,5 +1168,268 @@ test('dismissing an approval retains it in history without launching a run', asy
   await expect(page.getByRole('button', { name: 'Authorize run' })).toHaveCount(0);
   await expect(page.getByText('dismissed', { exact: true })).toBeVisible();
   expect(writes.map((w) => w.path)).toEqual(['/automation-occurrences/occurrence-a/dismiss']);
+  expect(errors).toEqual([]);
+});
+
+test('project creation points to Codex setup when the account is disconnected', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page);
+  await page.route('**/api/v1/auth/openai', (route) =>
+    route.fulfill({ json: { connected: false } }),
+  );
+  await page.route('**/api/v1/auth/openai/models', (route) => route.fulfill({ json: [] }));
+  await page.goto('/projects');
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  const notice = page.locator('.callout').filter({ hasText: 'Connect your Codex account' });
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole('link', { name: 'Settings' })).toHaveAttribute(
+    'href',
+    '/settings#openai',
+  );
+  await notice.getByRole('link', { name: 'Settings' }).click();
+  await expect(page).toHaveURL(/settings#openai$/);
+  await expect(page.locator('#openai')).toBeInViewport();
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('VM numeric settings stay empty after backspace and submit replacement numbers', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page);
+  await page.goto('/settings');
+  const vcpus = page.getByLabel('vCPUs per VM', { exact: true });
+  await vcpus.focus();
+  await vcpus.press('ControlOrMeta+A');
+  await vcpus.press('Backspace');
+  await expect(vcpus).toHaveValue('');
+  await vcpus.pressSequentially('8');
+  await expect(vcpus).toHaveValue('8');
+  for (const [label, value] of [
+    ['Concurrency', '3'],
+    ['Memory per VM, MiB', '8192'],
+    ['Default VM storage, GiB', '80'],
+  ]) {
+    const input = page.getByLabel(label, { exact: true });
+    await input.fill('');
+    await expect(input).toHaveValue('');
+    await input.pressSequentially(value);
+    await expect(input).toHaveValue(value);
+  }
+  await vcpus.fill('');
+  await page.getByRole('button', { name: 'Save defaults', exact: true }).click();
+  expect(writes.filter((w) => w.path === '/system')).toEqual([]);
+  await vcpus.pressSequentially('6');
+  await page.getByRole('button', { name: 'Save defaults', exact: true }).click();
+  await expect(page.getByText('Execution defaults saved.', { exact: true })).toBeVisible();
+  expect(writes.find((w) => w.path === '/system')?.body).toEqual({
+    concurrency: 3,
+    vm_defaults: { vcpus: 6, memory_mib: 8192, disk_gib: 80 },
+  });
+  expect(errors).toEqual([]);
+});
+
+test('run threshold and runtime can be cleared and retyped without a leading zero', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page);
+  await page.goto('/prepare?project=project-a');
+  await page.getByRole('checkbox', { name: /General usage.*12 hours/ }).check();
+  const threshold = page.getByRole('spinbutton', { name: 'Usage threshold percent' }).first();
+  await threshold.fill('');
+  await expect(threshold).toHaveValue('');
+  await threshold.pressSequentially('87.5');
+  await expect(threshold).toHaveValue('87.5');
+  await page.getByRole('checkbox', { name: 'Elapsed runtime reaches' }).check();
+  const runtime = page.getByRole('spinbutton', { name: 'Runtime limit in hours' });
+  await runtime.fill('');
+  await expect(runtime).toHaveValue('');
+  await runtime.pressSequentially('2.5');
+  await expect(runtime).toHaveValue('2.5');
+  await page.getByRole('button', { name: 'Start run', exact: false }).click();
+  await expect(page).toHaveURL(/runs\/run-1234$/);
+  const conditions = writes.find((w) => w.path === '/runs')?.body.stop_conditions;
+  expect(conditions).toContainEqual({
+    kind: 'usage',
+    limit_id: 'codex',
+    window_minutes: 720,
+    used_percent: 87.5,
+  });
+  expect(conditions).toContainEqual({ kind: 'elapsed', seconds: 9000 });
+  expect(errors).toEqual([]);
+});
+
+test('automation numeric fields allow empty editing and preserve zero as a valid threshold', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page);
+  await page.goto('/automations');
+  await page.getByRole('button', { name: 'New automation', exact: true }).click();
+  await page.getByRole('checkbox', { name: /Package telescope/ }).check();
+  await page.getByRole('radio', { name: /^Launch automatically/ }).check();
+  for (const [label, value] of [
+    ['Usage window (minutes)', '720'],
+    ['Reset within (hours)', '10.5'],
+    ['Minimum remaining (%)', '0'],
+  ]) {
+    const input = page.getByLabel(label, { exact: true });
+    await input.fill('');
+    await expect(input).toHaveValue('');
+    await input.pressSequentially(value);
+    await expect(input).toHaveValue(value);
+  }
+  const threshold = page.getByRole('spinbutton', { name: 'Usage threshold percent' }).first();
+  await threshold.fill('');
+  await expect(threshold).toHaveValue('');
+  await threshold.pressSequentially('90');
+  await page.getByRole('button', { name: 'Save automation' }).click();
+  await expect(page.getByRole('heading', { name: 'No automations yet' })).toBeVisible();
+  expect(writes.find((w) => w.path === '/automations')?.body.trigger).toEqual({
+    window_minutes: 720,
+    limit_id: null,
+    hours_before_reset: 10.5,
+    min_remaining_percent: 0,
+  });
+  expect(errors).toEqual([]);
+});
+
+test('Kanban descriptions expand read-only and retain formatting without task mutations', async ({
+  page,
+}) => {
+  const { writes, errors } = await fixture(page);
+  const description = Array.from(
+    { length: 16 },
+    (_, i) => `Requirement ${i + 1}: Read the full description.`,
+  ).join('\n\n');
+  await page.route('**/api/v1/projects/project-a/tasks', (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: 'long-task',
+          title: 'Long task',
+          description,
+          column: 'todo',
+          position: 0,
+          origin: 'user',
+        },
+      ],
+    }),
+  );
+  await page.goto('/projects/project-a');
+  await page.getByRole('button', { name: 'Kanban', exact: true }).click();
+  const card = page.locator('.task-card').filter({ hasText: 'Long task' });
+  const text = card.locator('.task-description');
+  const collapsedHeight = await text.evaluate((el) => el.clientHeight);
+  const expand = card.getByRole('button', {
+    name: 'Expand description for Long task',
+    exact: true,
+  });
+  await expect(expand).toHaveAttribute('aria-expanded', 'false');
+  await expand.click();
+  await expect(text).toHaveText(description);
+  await expect.poll(() => text.evaluate((el) => el.clientHeight)).toBeGreaterThan(collapsedHeight);
+  await expect(text).toHaveCSS('white-space', 'pre-wrap');
+  await expect(page.getByRole('textbox', { name: 'Description', exact: true })).toHaveCount(0);
+  const collapse = card.getByRole('button', {
+    name: 'Collapse description for Long task',
+    exact: true,
+  });
+  await expect(collapse).toHaveAttribute('aria-expanded', 'true');
+  await collapse.click();
+  await expect.poll(() => text.evaluate((el) => el.clientHeight)).toBe(collapsedHeight);
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('live activity follows appended and resized content, pauses on scrolling up, and resumes', async ({
+  page,
+}) => {
+  const { errors } = await fixture(page);
+  await page.addInitScript(() => {
+    const streams: Stream[] = [];
+    class Stream {
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      constructor() {
+        streams.push(this);
+        queueMicrotask(() => this.onopen?.());
+      }
+      close() {}
+    }
+    Object.defineProperty(window, 'EventSource', { value: Stream });
+    Object.assign(window, {
+      emitActivity: (event: unknown) =>
+        streams.forEach((s) => s.onmessage?.({ data: JSON.stringify(event) })),
+    });
+  });
+  const events = Array.from({ length: 30 }, (_, i) => ({
+    id: i + 1,
+    run_id: 'run-1234',
+    project_id: 'project-a',
+    execution_id: 'exec-a',
+    type: 'agent.progress',
+    timestamp: stamp,
+    message: `Work unit ${i + 1}\n${'Detailed progress. '.repeat(15)}`,
+  }));
+  await page.route('**/api/v1/runs/run-1234', (route) =>
+    route.fulfill({
+      json: {
+        id: 'run-1234',
+        status: 'running',
+        created_at: stamp,
+        parallel: true,
+        stop_conditions: [],
+        executions: [
+          {
+            id: 'exec-a',
+            project_id: 'project-a',
+            project_name: 'Package telescope',
+            status: 'running',
+          },
+        ],
+      },
+    }),
+  );
+  await page.route('**/api/v1/runs/run-1234/events', (route) => route.fulfill({ json: events }));
+  await page.goto('/runs/run-1234');
+  const log = page.getByRole('log', { name: 'Run activity' });
+  await expect(log).toContainText('Work unit 30');
+  const gap = () => log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  await expect.poll(gap).toBeLessThan(3);
+  const emit = async (event: unknown) =>
+    page.evaluate((value) => {
+      (window as unknown as { emitActivity: (event: unknown) => void }).emitActivity(value);
+    }, event);
+  await emit({ ...events[0], id: 31, message: 'New live progress\n'.repeat(10) });
+  await expect(log).toContainText('New live progress');
+  await expect.poll(gap).toBeLessThan(3);
+  await log.evaluate((el) => {
+    el.scrollTop -= 300;
+  });
+  await expect(page.getByRole('button', { name: '↓ Jump to latest' })).toBeVisible();
+  const pausedTop = await log.evaluate((el) => el.scrollTop);
+  await emit({ ...events[0], id: 32, message: 'Progress while reading older output\n'.repeat(10) });
+  await expect(log).toContainText('Progress while reading older output');
+  await expect.poll(() => log.evaluate((el) => el.scrollTop)).toBe(pausedTop);
+  await page.getByRole('button', { name: '↓ Jump to latest' }).click();
+  await expect.poll(gap).toBeLessThan(3);
+  await emit({
+    ...events[0],
+    id: 33,
+    type: 'command',
+    message: 'Run tests',
+    data: {
+      command: 'npm test',
+      status: 'completed',
+      exitCode: 0,
+      aggregatedOutput: 'Test output\n'.repeat(80),
+    },
+  });
+  await log.getByText('Show output', { exact: true }).click();
+  await expect.poll(gap).toBeLessThan(3);
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect.poll(gap).toBeLessThan(3);
+  await expect(page.getByRole('button', { name: '↓ Jump to latest' })).toHaveCount(0);
   expect(errors).toEqual([]);
 });

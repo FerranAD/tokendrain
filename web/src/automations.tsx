@@ -1,3 +1,4 @@
+import { NumberInput } from './number-input';
 import { useEffect, useState } from 'react';
 import { mutate, useAction, useResource } from './api';
 import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
@@ -65,7 +66,7 @@ export function AutomationsPage() {
     <>
       <PageTitle
         title="Automations"
-        description="Put remaining allowance to work before it resets. Conditions are checked every 15 minutes."
+        description="Consume remaining usage before the weekly reset. Conditions are checked every 15 minutes."
         actions={
           <button
             className="primary"
@@ -209,7 +210,7 @@ export function AutomationsPage() {
 }
 
 function AutomationEditor({ automation, close }: { automation?: Automation; close: () => void }) {
-  const [name, setName] = useState(automation?.name ?? 'Drain weekly allowance');
+  const [name, setName] = useState(automation?.name ?? 'Drain weekly usage');
   const [trigger, setTrigger] = useState(automation?.trigger ?? defaultTrigger);
   const [mode, setMode] = useState<Automation['mode']>(automation?.mode ?? 'approval');
   const usage = useResource<UsageWindow[]>('/usage');
@@ -274,14 +275,13 @@ function AutomationEditor({ automation, close }: { automation?: Automation; clos
           <div className="form-grid">
             <label>
               Usage window (minutes)
-              <input
-                type="number"
+              <NumberInput
                 min={1}
                 max={525600}
                 required
                 value={trigger.window_minutes}
                 list="automation-window-durations"
-                onChange={(e) => patch({ window_minutes: Number(e.target.value) })}
+                onValueChange={(value) => patch({ window_minutes: value })}
               />
             </label>
             <datalist id="automation-window-durations">
@@ -309,26 +309,24 @@ function AutomationEditor({ automation, close }: { automation?: Automation; clos
             </label>
             <label>
               Reset within (hours)
-              <input
-                type="number"
+              <NumberInput
                 min={0.01}
                 max={168}
                 step="any"
                 required
                 value={trigger.hours_before_reset}
-                onChange={(e) => patch({ hours_before_reset: Number(e.target.value) })}
+                onValueChange={(value) => patch({ hours_before_reset: value })}
               />
             </label>
             <label>
               Minimum remaining (%)
-              <input
-                type="number"
+              <NumberInput
                 min={0}
                 max={100}
                 step="any"
                 required
                 value={trigger.min_remaining_percent}
-                onChange={(e) => patch({ min_remaining_percent: Number(e.target.value) })}
+                onValueChange={(value) => patch({ min_remaining_percent: value })}
               />
             </label>
           </div>
@@ -371,7 +369,7 @@ function AutomationEditor({ automation, close }: { automation?: Automation; clos
           )}
           <p className="small muted">
             Checked every 15 minutes. One run per matching reset window. The run stops at reset,
-            including during wrap-up, to avoid spending the new allowance.
+            including during wrap-up, to avoid spending usage from the new window.
           </p>
           <ErrorNotice error={usage.error || ntfy.error} />
           <UnsavedNotice dirty={timing.dirty} />

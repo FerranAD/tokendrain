@@ -51,3 +51,8 @@ After merging a documentation change, check the workflow's **Publish documentati
 - Internal task logs and `RESUME.md` are excluded from the public site. Build hooks and theme templates are also excluded from its output.
 
 Run the strict build before committing. It checks documentation links and rejects build warnings. Refer to [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) for authoring features and [MkDocs configuration](https://www.mkdocs.org/user-guide/configuration/) for hosting options.
+
+
+## Writing style
+
+Explain what the tool does in plain language. You pay for a Codex subscription, the weekly usage limit often resets with usage left, and Tokendrain consumes those tokens on approved work. Use **usage limits** and **remaining usage** consistently. Keep setup and operation instructions concrete; skip startup slogans and promotional feature-card copy.

@@ -342,7 +342,7 @@ class AutomationService:
                         occurrence.id,
                         occurrence.automation_name,
                         f"{max(0, 100 - float(occurrence.matched_window['used_percent'])):.0f}% "
-                        f"allowance remains. Reset: {aware(occurrence.resets_at).isoformat()}. "
+                        f"usage remains. Reset: {aware(occurrence.resets_at).isoformat()}. "
                         "Open Tokendrain to review and authorize the run before reset.",
                     )
                     delivery_error = None

@@ -16,6 +16,7 @@ export function Kanban({ id }: { id: string }) {
   const resource = useResource<Task[]>(`/projects/${id}/tasks`);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [editing, setEditing] = useState<Partial<Task> | null>(null);
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [dragging, setDragging] = useState<string | null>(null);
   const [target, setTarget] = useState<{ column: TaskColumn; position: number } | null>(null);
   const action = useAction();
@@ -215,7 +216,39 @@ export function Kanban({ id }: { id: string }) {
                       <strong>{task.title}</strong>
                       {task.origin === 'agent' && <span className="ai-tag">AI</span>}
                     </div>
-                    {task.description && <p>{task.description}</p>}
+                    {task.description && (
+                      <>
+                        <p
+                          id={`${id}-description-${task.id}`}
+                          className={
+                            expandedDescriptions.has(task.id)
+                              ? 'task-description expanded'
+                              : 'task-description'
+                          }
+                        >
+                          {task.description}
+                        </p>
+                        <button
+                          className="quiet tiny task-expand"
+                          type="button"
+                          aria-expanded={expandedDescriptions.has(task.id)}
+                          aria-controls={`${id}-description-${task.id}`}
+                          aria-label={`${expandedDescriptions.has(task.id) ? 'Collapse' : 'Expand'} description for ${task.title}`}
+                          onClick={() =>
+                            setExpandedDescriptions((old) => {
+                              const next = new Set(old);
+                              if (next.has(task.id)) next.delete(task.id);
+                              else next.add(task.id);
+                              return next;
+                            })
+                          }
+                        >
+                          {expandedDescriptions.has(task.id)
+                            ? 'Collapse description'
+                            : 'Expand description'}
+                        </button>
+                      </>
+                    )}
                     <button
                       className="quiet tiny task-edit"
                       onClick={() =>

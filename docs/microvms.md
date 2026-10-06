@@ -134,7 +134,7 @@ nix build .#checks.x86_64-linux.module -L
 nix build .#checks.x86_64-linux.firecracker -L
 ```
 
-The Firecracker test requires nested KVM. It verifies current control A→B on the same project root, persistence of ordinary machine files and a Nix-installed tool, temporary credentials, storage growth, idle Workspace browsing, and active Workspace exclusion. It also exercises the privileged helper/systemd sandbox, real guest boot/control, concurrent project networking, public-egress allowance, host/LAN/interguest denial, fail-closed firewall reloads, disk persistence and cleanup. Its simulated public endpoint is inside the isolated test network, so these checks do not depend on a public website or real credentials.
+The Firecracker test requires nested KVM. It verifies current control A→B on the same project root, persistence of ordinary machine files and a Nix-installed tool, temporary credentials, storage growth, idle Workspace browsing, and active Workspace exclusion. It also exercises the privileged helper/systemd sandbox, real guest boot/control, concurrent project networking, allowed public egress, host/LAN/interguest denial, fail-closed firewall reloads, disk persistence and cleanup. Its simulated public endpoint is inside the isolated test network, so these checks do not depend on a public website or real credentials.
 
 On an installed host:
 

@@ -1,5 +1,5 @@
 import { Icon } from './icons';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Execution, LiveEvent, Report } from './types';
 import { ReportView } from './ui';
 
@@ -194,7 +194,21 @@ export function ActivityTimeline({
   const [project, setProject] = useState('all');
   const [raw, setRaw] = useState(false);
   const [following, setFollowing] = useState(true);
+  const followingRef = useRef(true);
+  const lastScrollTop = useRef(0);
   const viewport = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const setFollow = (value: boolean) => {
+    followingRef.current = value;
+    setFollowing(value);
+  };
+  const scrollToLatest = useCallback(() => {
+    const el = viewport.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      lastScrollTop.current = el.scrollTop;
+    }
+  }, []);
   const normalized = events.map(normalize).filter((e, i, all) => {
     if (raw || e.type !== 'agent.checkpoint') return true;
     const last = all
@@ -218,9 +232,19 @@ export function ActivityTimeline({
         executions.some((x) => x.project_id === project && x.id === e.execution_id)) &&
       (raw || e.type !== 'execution.debug'),
   );
+  useLayoutEffect(() => {
+    if (followingRef.current) scrollToLatest();
+  }, [events, executions, project, raw, scrollToLatest]);
   useEffect(() => {
-    if (following && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
-  }, [events, following, project, raw]);
+    // Output expansion, text wrapping and late rendering can change the height
+    // without adding an event. Keep following until the user scrolls upward.
+    const observer = new ResizeObserver(() => {
+      if (followingRef.current) scrollToLatest();
+    });
+    if (content.current) observer.observe(content.current);
+    if (viewport.current) observer.observe(viewport.current);
+    return () => observer.disconnect();
+  }, [scrollToLatest]);
   return (
     <>
       <div className="row between wrap activity-controls">
@@ -254,83 +278,85 @@ export function ActivityTimeline({
         ref={viewport}
         className="activity-timeline"
         role="log"
+        aria-label="Run activity"
+        tabIndex={0}
         onScroll={() => {
           const el = viewport.current;
-          if (el) setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < 70);
+          if (!el) return;
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 70) setFollow(true);
+          else if (el.scrollTop < lastScrollTop.current) setFollow(false);
+          lastScrollTop.current = el.scrollTop;
         }}
       >
-        {visible.map((e, i) => {
-          const execution = executions.find(
-            (x) => x.id === e.execution_id || x.project_id === e.project_id,
-          );
-          return (
-            <article
-              className={`activity-row activity-${e.type.replaceAll('.', '-')} ${e.type === 'command' && ((e.data?.exitCode != null && e.data.exitCode !== 0) || e.data?.status === 'failed') ? 'activity-failed' : ''}`}
-              key={`${e.id}-${i}`}
-            >
-              <div className="activity-meta">
-                <time>{e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '—'}</time>
-                {project === 'all' && execution && (
-                  <span className="project-event-label">
-                    {execution.project_name || execution.project_id.slice(0, 8)}
-                  </span>
-                )}
-              </div>
-              <span className="activity-marker">
-                <Icon
-                  name={
-                    e.type === 'agent.checkpoint'
-                      ? 'checkpoint'
-                      : e.type === 'command'
-                        ? 'terminal'
-                        : e.type === 'files.changed'
-                          ? 'files'
-                          : e.type === 'agent.progress'
-                            ? 'agent'
-                            : e.type === 'execution.usage_stop'
-                              ? 'stop'
-                              : e.type === 'usage.updated'
-                                ? 'usage'
-                                : e.type.includes('error')
-                                  ? 'alert'
-                                  : 'clock'
-                  }
-                />
-              </span>
-              <div className="activity-body">
-                {raw ? (
-                  <details>
-                    <summary>
-                      {e.type} · {e.message?.slice(0, 100)}
-                    </summary>
-                    <pre className="activity-output">
-                      {JSON.stringify(
-                        events.find((original) => original.id === e.id) || e,
-                        null,
-                        2,
-                      )}
-                    </pre>
-                  </details>
-                ) : (
-                  <ActivityCard event={e} />
-                )}
-              </div>
-            </article>
-          );
-        })}
-        {!visible.length && <p className="muted">No activity yet.</p>}
+        <div ref={content}>
+          {visible.map((e, i) => {
+            const execution = executions.find(
+              (x) => x.id === e.execution_id || x.project_id === e.project_id,
+            );
+            return (
+              <article
+                className={`activity-row activity-${e.type.replaceAll('.', '-')} ${e.type === 'command' && ((e.data?.exitCode != null && e.data.exitCode !== 0) || e.data?.status === 'failed') ? 'activity-failed' : ''}`}
+                key={`${e.id}-${i}`}
+              >
+                <div className="activity-meta">
+                  <time>{e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '—'}</time>
+                  {project === 'all' && execution && (
+                    <span className="project-event-label">
+                      {execution.project_name || execution.project_id.slice(0, 8)}
+                    </span>
+                  )}
+                </div>
+                <span className="activity-marker">
+                  <Icon
+                    name={
+                      e.type === 'agent.checkpoint'
+                        ? 'checkpoint'
+                        : e.type === 'command'
+                          ? 'terminal'
+                          : e.type === 'files.changed'
+                            ? 'files'
+                            : e.type === 'agent.progress'
+                              ? 'agent'
+                              : e.type === 'execution.usage_stop'
+                                ? 'stop'
+                                : e.type === 'usage.updated'
+                                  ? 'usage'
+                                  : e.type.includes('error')
+                                    ? 'alert'
+                                    : 'clock'
+                    }
+                  />
+                </span>
+                <div className="activity-body">
+                  {raw ? (
+                    <details>
+                      <summary>
+                        {e.type} · {e.message?.slice(0, 100)}
+                      </summary>
+                      <pre className="activity-output">
+                        {JSON.stringify(
+                          events.find((original) => original.id === e.id) || e,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
+                  ) : (
+                    <ActivityCard event={e} />
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {!visible.length && <p className="muted">No activity yet.</p>}
+        </div>
       </div>
       {!following && (
         <button
           className="jump-latest"
           onClick={() => {
-            setFollowing(true);
-            viewport.current?.scrollTo({
-              top: viewport.current.scrollHeight,
-              behavior: matchMedia('(prefers-reduced-motion: reduce)').matches
-                ? 'instant'
-                : 'smooth',
-            });
+            setFollow(true);
+            scrollToLatest();
           }}
         >
           ↓ Jump to latest

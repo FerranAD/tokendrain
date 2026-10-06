@@ -67,15 +67,18 @@ in
     concurrency = mkOption {
       type = types.ints.between 1 64;
       default = 2;
+      description = "Maximum simultaneous project executions. The website may choose a lower concurrency.";
     };
     web = {
       listenAddress = mkOption {
         type = types.str;
         default = "127.0.0.1";
+        description = "Address on which the web daemon listens. The module does not open a public firewall port.";
       };
       port = mkOption {
         type = types.port;
         default = 8742;
+        description = "TCP port for the web UI and administrative API.";
       };
       publicUrl = mkOption {
         type = types.str;
@@ -99,6 +102,7 @@ in
       hypervisor = mkOption {
         type = types.enum [ "firecracker" ];
         default = "firecracker";
+        description = "VM backend. Firecracker is the only supported hypervisor.";
       };
       guestArtifacts = mkOption {
         type = types.package;
@@ -107,6 +111,7 @@ in
       maxMemoryMiB = mkOption {
         type = types.ints.between 512 131072;
         default = 16384;
+        description = "Maximum guest memory per VM in MiB, enforced by the privileged helper.";
       };
       totalMemoryMiB = mkOption {
         type = types.nullOr (types.ints.between 512 16777216);
@@ -116,15 +121,18 @@ in
       maxVcpus = mkOption {
         type = types.ints.between 1 32;
         default = 16;
+        description = "Maximum vCPUs per VM, enforced by the privileged helper.";
       };
       defaults = {
         vcpus = mkOption {
           type = types.ints.between 1 32;
           default = 4;
+          description = "Initial default vCPUs per VM. Saved website defaults take precedence within the host limits.";
         };
         memoryMiB = mkOption {
           type = types.ints.between 512 131072;
           default = 4096;
+          description = "Initial default guest memory per VM in MiB. Saved website defaults take precedence within the host limits.";
         };
         diskGiB = mkOption {
           type = types.ints.between 1 4096;

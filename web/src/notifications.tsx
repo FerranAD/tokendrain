@@ -1,3 +1,4 @@
+import { NumberInput } from './number-input';
 import { useState } from 'react';
 import { mutate, useAction, useResource } from './api';
 import { UnsavedNotice, useUnsavedChanges } from './drafts';
@@ -34,8 +35,8 @@ export function NotificationSettings() {
     <section className="panel" id="notifications">
       <h2>Notifications</h2>
       <p className="muted">
-        Get an ntfy reminder when your Codex allowance is about to reset and you still have capacity
-        left. Subscribe to the same server and topic in your ntfy app.
+        Get an ntfy reminder when your Codex usage limit is about to reset and you still have
+        capacity left. Subscribe to the same server and topic in your ntfy app.
       </p>
       <ErrorNotice error={resource.error} />
       {resource.data ? (
@@ -141,8 +142,8 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
         )}
         <h3>Usage reminder rules</h3>
         <p className="small muted">
-          Send once per rule and reset window when both conditions match. Remaining allowance is
-          100% minus observed usage. Checks run every minute; unavailable or stale usage sends no
+          Send once per rule and reset window when both conditions match. Remaining usage is 100%
+          minus observed usage. Checks run every minute; unavailable or stale usage sends no
           reminders. These reminders do not launch runs.
         </p>
         {config.rules.map((rule, index) => (
@@ -172,13 +173,12 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
             <div className="form-grid">
               <label>
                 Usage window (minutes)
-                <input
-                  type="number"
+                <NumberInput
                   min={1}
                   max={525600}
                   required
                   value={rule.window_minutes}
-                  onChange={(event) => updateRule(rule.id, { window_minutes: +event.target.value })}
+                  onValueChange={(value) => updateRule(rule.id, { window_minutes: value })}
                 />
                 <span className="tiny muted">Weekly: 10080 · five-hour: 300</span>
               </label>
@@ -195,30 +195,24 @@ function NotificationForm({ initial, reload }: { initial: NtfyStatus; reload: ()
               </label>
               <label>
                 Reset within (hours)
-                <input
-                  type="number"
+                <NumberInput
                   min={0.1}
                   max={168}
                   step={0.1}
                   required
                   value={rule.hours_before_reset}
-                  onChange={(event) =>
-                    updateRule(rule.id, { hours_before_reset: +event.target.value })
-                  }
+                  onValueChange={(value) => updateRule(rule.id, { hours_before_reset: value })}
                 />
               </label>
               <label>
-                At least this much allowance remaining (%)
-                <input
-                  type="number"
+                Minimum remaining usage (%)
+                <NumberInput
                   min={0}
                   max={100}
                   step={0.1}
                   required
                   value={rule.min_remaining_percent}
-                  onChange={(event) =>
-                    updateRule(rule.id, { min_remaining_percent: +event.target.value })
-                  }
+                  onValueChange={(value) => updateRule(rule.id, { min_remaining_percent: value })}
                 />
               </label>
             </div>

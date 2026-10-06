@@ -121,7 +121,7 @@ Automation input:
 
 ```json
 {
-  "name": "Drain weekly allowance",
+  "name": "Drain weekly usage",
   "enabled": true,
   "mode": "approval",
   "trigger": {

@@ -1,3 +1,4 @@
+import { NumberInput } from './number-input';
 import { Icon } from './icons';
 import { ModelSelector } from './model-selector';
 import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
@@ -434,20 +435,17 @@ export function RunBuilder({
                     </label>
                     <label className="number-inline">
                       <span className="sr-only">Usage threshold percent</span>
-                      <input
-                        type="number"
+                      <NumberInput
                         min={1}
                         max={100}
                         step={0.1}
                         required={!!condition}
                         disabled={!condition}
                         value={condition?.kind === 'usage' ? condition.used_percent : 95}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           setConditions((old) =>
                             old.map((item) =>
-                              sameWindow(item, window)
-                                ? { ...item, used_percent: Number(e.target.value) }
-                                : item,
+                              sameWindow(item, window) ? { ...item, used_percent: value } : item,
                             ),
                           )
                         }
@@ -472,19 +470,16 @@ export function RunBuilder({
                   {condition.kind === 'usage' && (
                     <label className="number-inline">
                       <span className="sr-only">Usage threshold percent</span>
-                      <input
-                        type="number"
+                      <NumberInput
                         min={1}
                         max={100}
                         step={0.1}
                         required
                         value={condition.used_percent}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           setConditions((old) =>
                             old.map((item) =>
-                              item === condition
-                                ? { ...condition, used_percent: Number(e.target.value) }
-                                : item,
+                              item === condition ? { ...condition, used_percent: value } : item,
                             ),
                           )
                         }
@@ -521,21 +516,20 @@ export function RunBuilder({
                 </label>
                 <label className="number-inline">
                   <span className="sr-only">Runtime limit in hours</span>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={0.0167}
                     max={168}
                     step="any"
                     disabled={!elapsed}
                     required={!!elapsed}
                     value={elapsed?.kind === 'elapsed' ? elapsed.seconds / 3600 : 4}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       setConditions((old) =>
                         old.map((item) =>
                           item.kind === 'elapsed'
                             ? {
                                 kind: 'elapsed',
-                                seconds: Math.round(Number(e.target.value) * 3600),
+                                seconds: Math.round(value * 3600),
                               }
                             : item,
                         ),
