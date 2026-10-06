@@ -622,7 +622,9 @@ async def test_failed_metadata_probe_keeps_last_usage_and_caches_failure(
 
     response = await client.get("/api/v1/usage")
     assert response.status_code == 200
-    assert response.json() == [old.model_dump(mode="json")]
+    assert response.json() == [
+        {**old.model_dump(mode="json"), "metadata": {"agent": "codex", "account_id": None}}
+    ]
     models = await client.get("/api/v1/auth/openai/models")
     assert models.status_code == 200 and models.json()[0]["id"] == "codex"
     status = await client.get("/api/v1/auth/openai")

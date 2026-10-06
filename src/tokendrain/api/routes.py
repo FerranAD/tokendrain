@@ -22,9 +22,12 @@ from starlette.background import BackgroundTask
 
 from tokendrain import __version__
 from tokendrain.account_metadata import account_probe
+from tokendrain.agents import AGENT_NAMES, reset_account, switch_agent
 from tokendrain.api.app import current, encoded
 from tokendrain.api.schemas import (
+    AgentInput,
     AuthImport,
+    ClaudeLoginCode,
     LoginInput,
     PlatformInput,
     ProjectCreateInput,
@@ -47,7 +50,6 @@ from tokendrain.db.models import (
     Schedule,
     SecretEntry,
     Setting,
-    UsageSnapshot,
 )
 from tokendrain.doctor import inspect_service_checks
 from tokendrain.domain import (
@@ -477,6 +479,7 @@ async def validate_projects(services: Application, template: RunTemplate) -> Non
 async def create_schedule(request: Request, body: ScheduleInput) -> Any:
     services = current(request)
     await validate_projects(services, body.run_template)
+    body.run_template.configured_agent = services.settings.active_agent
     row = Schedule(
         **body.model_dump(mode="json"),
         next_run_at=next_occurrence(body.cron, body.timezone, utcnow()),
@@ -497,6 +500,8 @@ async def update_schedule(request: Request, schedule_id: str, body: dict[str, An
         merged = {key: getattr(row, key) for key in ScheduleInput.model_fields}
     merged.update(body)
     values = ScheduleInput.model_validate(merged)
+    if "run_template" in body:
+        values.run_template.configured_agent = services.settings.active_agent
     await validate_projects(services, values.run_template)
     async with services.sessions.begin() as db:
         row = await db.get(Schedule, schedule_id)
@@ -645,6 +650,77 @@ async def openai_status(request: Request) -> Any:
     }
 
 
+@router.get(API + "/agent")
+async def active_agent(request: Request) -> Any:
+    services = current(request)
+    name = services.settings.active_agent
+    status = (
+        await services.claude.status() if name == "claude_code" else await openai_status(request)
+    )
+    return {**status, "name": name, "label": AGENT_NAMES[name]}
+
+
+@router.put(API + "/agent")
+async def set_agent(request: Request, body: AgentInput) -> Any:
+    await switch_agent(current(request), body.name)
+    return await active_agent(request)
+
+
+@router.get(API + "/agent/models")
+async def agent_models(request: Request) -> Any:
+    return (await account_probe(current(request))).get("models", [])
+
+
+@router.get(API + "/auth/claude")
+async def claude_status(request: Request) -> Any:
+    return await current(request).claude.status()
+
+
+@router.post(API + "/auth/claude/login", status_code=201)
+async def start_claude_login(request: Request) -> Any:
+    services = current(request)
+    await no_active(services)
+    return await services.claude.start_login()
+
+
+@router.get(API + "/auth/claude/login/{login_id}")
+async def claude_login_status(request: Request, login_id: str) -> Any:
+    return current(request).claude.login_status(login_id)
+
+
+@router.post(API + "/auth/claude/login/{login_id}/code")
+async def claude_login_code(request: Request, login_id: str, body: ClaudeLoginCode) -> Any:
+    await current(request).claude.code(login_id, body.code.get_secret_value())
+    return current(request).claude.login_status(login_id)
+
+
+@router.delete(API + "/auth/claude/login/{login_id}", status_code=204)
+async def cancel_claude_login(request: Request, login_id: str) -> Response:
+    services = current(request)
+    services.claude.login_status(login_id)
+    await services.claude.cancel_login()
+    return Response(status_code=204)
+
+
+@router.post(API + "/auth/claude/check")
+async def check_claude(request: Request) -> Any:
+    services = current(request)
+    await services.claude.windows(force=True)
+    await services.events.publish("claude.checked")
+    return await services.claude.status()
+
+
+@router.delete(API + "/auth/claude", status_code=204)
+@provider_change
+async def disconnect_claude(request: Request) -> Response:
+    services = current(request)
+    await services.claude.disconnect()
+    if services.settings.active_agent == "claude_code":
+        await reset_account(services, None)
+    await services.events.publish("claude.disconnected")
+    return Response(status_code=204)
+
+
 @router.post(API + "/auth/openai/import")
 @provider_change
 async def import_openai(request: Request, body: AuthImport) -> Any:
@@ -655,9 +731,10 @@ async def import_openai(request: Request, body: AuthImport) -> Any:
         if old.connected and old.id != account.id:
             await services.auth.sign_out(old.id)
     services.probe_cache = None
-    async with services.sessions.begin() as db:
-        await db.execute(delete(UsageSnapshot))
-    await account_probe(services, force=True)
+    if services.settings.active_agent == "codex":
+        await reset_account(services, account.id)
+    if services.settings.active_agent == "codex":
+        await account_probe(services, force=True)
     await services.events.publish("openai.connected")
     return await openai_status(request)
 
@@ -681,9 +758,8 @@ async def disconnect_openai(request: Request) -> Response:
     for account in await services.auth.accounts():
         if account.connected:
             revoked = await services.auth.sign_out(account.id) and revoked
-    services.probe_cache = None
-    async with services.sessions.begin() as db:
-        await db.execute(delete(UsageSnapshot))
+    if services.settings.active_agent == "codex":
+        await reset_account(services, None)
     await services.events.publish(
         "openai.disconnected",
         "Provider revocation succeeded"

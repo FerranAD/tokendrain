@@ -1,4 +1,6 @@
 import { NumberInput } from './number-input';
+import { AgentSettings, ClaudeSettings } from './agent-settings';
+import type { AgentStatus } from './types';
 import { ThemeControl } from './theme';
 import { NotificationSettings } from './notifications';
 import { Icon } from './icons';
@@ -10,6 +12,7 @@ import type { GitHubStatus, OpenAIStatus, ProjectGitHub, SystemInfo } from './ty
 import { ActionNotice, Badge, ErrorNotice, Loading, PageTitle } from './ui';
 
 export function SettingsPage() {
+  const agent = useResource<AgentStatus>('/agent');
   useEffect(() => {
     const section = window.location.hash.slice(1);
     if (section) document.getElementById(section)?.scrollIntoView();
@@ -18,14 +21,19 @@ export function SettingsPage() {
     <>
       <PageTitle title="Settings" />
       <nav className="settings-nav" aria-label="Settings sections">
-        <a href="#openai">Codex account</a>
+        <a href="#agent">Agent</a>
+        <a href={agent.data?.name === 'claude_code' ? '#claude' : '#openai'}>
+          {agent.data?.name === 'claude_code' ? 'Claude Code account' : 'Codex account'}
+        </a>
         <a href="#github">GitHub</a>
         <a href="#notifications">Notifications</a>
         <a href="#system">Execution defaults</a>
         <a href="#appearance">Appearance</a>
       </nav>
       <div className="settings-content">
-        <OpenAISettings />
+        <ErrorNotice error={agent.error} />
+        {agent.data && <AgentSettings agent={agent.data} />}
+        {agent.data?.name === 'claude_code' ? <ClaudeSettings /> : <OpenAISettings />}
         <GitHubSettings />
         <NotificationSettings />
         <SystemSettings />

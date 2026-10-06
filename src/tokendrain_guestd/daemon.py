@@ -11,8 +11,9 @@ import signal
 import socket
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from tokendrain import __version__
 from tokendrain.auth.openai import RuntimeCredentials
@@ -23,9 +24,20 @@ from tokendrain.protocol import GUEST_PORT, MAX_FRAME, FramedPeer
 
 
 class CredentialPayload(BaseModel):
-    openai: RuntimeCredentials
+    openai: RuntimeCredentials | None = None
+    claude: dict[str, str] | None = Field(default=None, repr=False)
     secrets: dict[str, str] = Field(default_factory=dict, repr=False)
     github_token: str | None = Field(default=None, repr=False)
+
+    @model_validator(mode="after")
+    def validate_agent(self) -> CredentialPayload:
+        if (self.openai is None) == (self.claude is None):
+            raise ValueError("Supply runtime credentials for exactly one agent")
+        if self.claude is not None and (
+            set(self.claude) != {"access_token"} or not self.claude["access_token"]
+        ):
+            raise ValueError("Claude guests accept only a nonempty subscription access token")
+        return self
 
     @field_validator("secrets")
     @classmethod
@@ -43,19 +55,36 @@ class CredentialPayload(BaseModel):
             "GIT_ASKPASS",
             "GH_TOKEN",
             "GITHUB_TOKEN",
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
         }
         for name in values:
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or name in protected:
+            if (
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                or name in protected
+                or name.startswith(("CLAUDE_", "ANTHROPIC_"))
+            ):
                 raise ValueError(f"secret name {name!r} is invalid or reserved")
         return values
 
 
 class GuestDaemon:
     def __init__(
-        self, runtime_dir: Path, codex_home: Path, workspace: Path, executable: str = "codex"
+        self,
+        runtime_dir: Path,
+        codex_home: Path,
+        workspace: Path,
+        executable: str = "codex",
+        claude_executable: str = "claude",
     ) -> None:
         self.runtime_dir, self.codex_home, self.workspace = runtime_dir, codex_home, workspace
         self.executable = executable
+        self.claude_executable = claude_executable
+        self._claude_task: asyncio.Task[None] | None = None
+        self._claude_resumed = False
         self.credentials: CredentialPayload | None = None
         self.process: asyncio.subprocess.Process | None = None
         self.codex: JsonRpcPeer | None = None
@@ -85,7 +114,11 @@ class GuestDaemon:
 
     def _sync_secrets(self) -> None:
         assert self.credentials
-        values = [self.credentials.openai.access_token, *self.credentials.secrets.values()]
+        values = [*self.credentials.secrets.values()]
+        if self.credentials.openai:
+            values.append(self.credentials.openai.access_token)
+        if self.credentials.claude:
+            values.append(self.credentials.claude.get("access_token", ""))
         if self.credentials.github_token:
             values.append(self.credentials.github_token)
             self._write_private("github-token", self.credentials.github_token)
@@ -137,7 +170,7 @@ class GuestDaemon:
             await self.stop_codex()
         self._stopping = False
         self.failed.clear()
-        if not self.credentials:
+        if not self.credentials or not self.credentials.openai:
             raise RpcError(-32001, "runtime credentials have not been supplied")
         self.codex_home.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -303,6 +336,29 @@ class GuestDaemon:
         return {"thread_id": thread, "restarted": True}
 
     async def handle(self, method: str, params: JsonObject) -> JsonObject:
+        if method == "claude_initialize":
+            if self.process or (self._claude_task and not self._claude_task.done()):
+                raise RpcError(-32002, "an agent is already running")
+            session_id = params.get("session_id")
+            if session_id:
+                from uuid import UUID
+
+                UUID(session_id)
+            self._active_thread = session_id or str(uuid4())
+            self._claude_resumed = bool(session_id)
+            return {"session_id": self._active_thread}
+        if method == "claude_turn":
+            if self.process or (self._claude_task and not self._claude_task.done()):
+                raise RpcError(-32002, "a turn is already active")
+            if not self.credentials or not self.credentials.claude:
+                raise RpcError(-32001, "Claude runtime credentials have not been supplied")
+            self._claude_task = asyncio.create_task(
+                self._run_claude(params), name="guest-claude-turn"
+            )
+            return {"started": True}
+        if method == "claude_interrupt":
+            await self._interrupt_claude()
+            return {}
         if method == "ping":
             return {"version": 1, "ready": True}
         if method in {"guest_info", "codex_status"}:
@@ -380,6 +436,7 @@ class GuestDaemon:
                 self._sync_secrets()
                 return await self._restart_at_boundary()
             if method in {"credentials_clear", "shutdown"}:
+                await self._interrupt_claude()
                 await self.stop_codex()
                 self.credentials = None
                 for path in self.runtime_dir.glob("*"):
@@ -390,6 +447,130 @@ class GuestDaemon:
                     self.shutdown_requested.set()
                 return {}
         raise RpcError(-32601, "unknown guest operation")
+
+    async def _interrupt_claude(self) -> None:
+        if self._claude_task and not self._claude_task.done():
+            if self.process and self.process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(self.process.pid, signal.SIGINT)
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._claude_task), 5)
+                    return
+                except TimeoutError:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(self.process.pid, signal.SIGKILL)
+            self._claude_task.cancel()
+            await asyncio.gather(self._claude_task, return_exceptions=True)
+
+    async def _run_claude(self, params: JsonObject) -> None:
+        assert self.credentials and self.credentials.claude
+        result: JsonObject = {"is_error": True}
+        process = None
+        self.turn_idle.clear()
+        self._active_turn = "claude"
+        try:
+            self._sync_secrets()
+            self.workspace.mkdir(parents=True, exist_ok=True)
+            config = self.codex_home.parent / "claude"
+            config.mkdir(mode=0o700, parents=True, exist_ok=True)
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith(("ANTHROPIC_", "CLAUDE_"))
+            }
+            env.update(self.credentials.secrets)
+            env.update(
+                {
+                    "CLAUDE_CODE_OAUTH_TOKEN": self.credentials.claude["access_token"],
+                    "CLAUDE_CONFIG_DIR": str(config),
+                    "GIT_CONFIG_GLOBAL": str(self.runtime_dir / "gitconfig"),
+                    "DISABLE_AUTOUPDATER": "1",
+                    "IS_SANDBOX": "1",
+                }
+            )
+            if self.credentials.github_token:
+                env.update(
+                    GH_TOKEN=self.credentials.github_token,
+                    GITHUB_TOKEN=self.credentials.github_token,
+                )
+            argv = [
+                self.claude_executable,
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--dangerously-skip-permissions",
+                "--json-schema",
+                json.dumps(params["schema"]),
+            ]
+            if params.get("model"):
+                argv.extend(["--model", params["model"]])
+            if params.get("effort") and params.get("model") != "haiku":
+                argv.extend(["--effort", params["effort"]])
+            argv.extend(
+                ["--resume" if self._claude_resumed else "--session-id", str(self._active_thread)]
+            )
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=self.workspace,
+                env=env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                limit=MAX_FRAME,
+                start_new_session=True,
+            )
+            self.process = process
+            assert process.stdin and process.stdout and process.stderr
+            process.stdin.write(str(params["prompt"]).encode())
+            await process.stdin.drain()
+            process.stdin.close()
+
+            async def stderr() -> None:
+                assert process and process.stderr
+                while line := await process.stderr.readline():
+                    if self.host:
+                        await self.host.notify(
+                            "guest/log",
+                            {"text": self.redactor.redact(line.decode(errors="replace"))},
+                        )
+
+            error_task = asyncio.create_task(stderr())
+            try:
+                while line := await process.stdout.readline():
+                    event = json.loads(line)
+                    if not isinstance(event, dict):
+                        continue
+                    if event.get("type") == "result":
+                        result = event
+                    if self.host:
+                        # The host redacts structured content before saving activity.
+                        await self.host.notify("claude/event", event)
+                code = await process.wait()
+                await error_task
+                if code != 0:
+                    result["is_error"] = True
+                text = json.dumps(result).lower()
+                result["provider_limited"] = any(
+                    marker in text for marker in ("rate_limit", "usage limit", "hit your limit")
+                )
+                self._claude_resumed = True
+            finally:
+                error_task.cancel()
+                await asyncio.gather(error_task, return_exceptions=True)
+        except (OSError, ValueError, KeyError):
+            result = {"is_error": True}
+        finally:
+            if process and process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                await process.wait()
+            self.process = None
+            self._active_turn = None
+            self.turn_idle.set()
+            if self.host and not self.host.closed.is_set():
+                await self.host.notify("claude/result", result)
 
     async def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self.host is not None:
@@ -402,6 +583,7 @@ class GuestDaemon:
         try:
             await peer.closed.wait()
         finally:
+            await self._interrupt_claude()
             await self.stop_codex()
             await peer.close()
             self.host = None
@@ -413,7 +595,7 @@ class GuestDaemon:
 
 async def serve(args: argparse.Namespace) -> None:
     daemon = GuestDaemon(
-        Path(args.runtime_dir), Path(args.codex_home), Path(args.workspace), args.codex
+        Path(args.runtime_dir), Path(args.codex_home), Path(args.workspace), args.codex, args.claude
     )
     connections: set[asyncio.Task[Any]] = set()
 
@@ -499,6 +681,7 @@ def main() -> None:
     parser.add_argument("--codex-home", default="/root/.local/share/tokendrain/codex")
     parser.add_argument("--workspace", default="/workspace")
     parser.add_argument("--codex", default="codex")
+    parser.add_argument("--claude", default="claude")
     parser.add_argument("--poweroff-on-shutdown", action="store_true")
     parser.add_argument("--unix-socket", help="local protocol testing only")
     asyncio.run(serve(parser.parse_args()))

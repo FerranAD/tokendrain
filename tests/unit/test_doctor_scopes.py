@@ -27,7 +27,7 @@ def test_daemon_checks_do_not_probe_vm_devices_or_tools(tmp_path: Path, monkeypa
     monkeypatch.setattr("tokendrain.doctor.inspect_vm_checks", unexpected_vm_probe)
     checks = inspect_checks(Settings(state_dir=tmp_path), scope="daemon")
     assert all(check.scope == "daemon" for check in checks)
-    assert set(queried) == {"mkfs.ext4", "e2fsck", "resize2fs", "codex"}
+    assert set(queried) == {"mkfs.ext4", "e2fsck", "resize2fs", "codex", "claude"}
     assert not {"kvm", "tun", "guest_artifacts", "nix"} & {check.name for check in checks}
 
 

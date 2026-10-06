@@ -135,6 +135,7 @@ def default_stop_conditions() -> list[StopCondition]:
 
 
 class RunTemplate(Boundary):
+    configured_agent: Literal["codex", "claude_code"] | None = None
     projects: list[ProjectConfig] = Field(min_length=1, max_length=64)
     stop_conditions: list[StopCondition] = Field(default_factory=default_stop_conditions)
     parallel: bool = True

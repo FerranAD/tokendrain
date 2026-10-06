@@ -4,15 +4,24 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 from pydantic import Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tokendrain.agents import agent_config
 from tokendrain.db.models import Automation, AutomationOccurrence, Project
-from tokendrain.domain import Boundary, DeadlineStop, RunTemplate, UsageStop, UsageWindow, utcnow
+from tokendrain.domain import (
+    Boundary,
+    DeadlineStop,
+    Reasoning,
+    RunTemplate,
+    UsageStop,
+    UsageWindow,
+    utcnow,
+)
 from tokendrain.events import EventBus
 from tokendrain.notifications import NtfyService, UsageTrigger
 from tokendrain.services import RunService, columns
@@ -88,6 +97,12 @@ class AutomationService:
                 else:
                     body = AutomationInput.model_validate(value)
                     row = Automation()
+                if (
+                    not automation_id
+                    or isinstance(value, AutomationInput)
+                    or "run_template" in value
+                ):
+                    body.run_template.configured_agent = (await agent_config(db))["name"]
                 if body.mode == "approval" and body.enabled:
                     if not (await self.notifications.config()).topic:
                         raise ValueError(
@@ -169,6 +184,8 @@ class AutomationService:
         trigger = UsageTrigger.model_validate(row.trigger)
         return row.enabled and any(
             w.limit_id == occurrence.limit_id
+            and f"{w.metadata.get('agent', 'codex')}:{w.metadata.get('account_id') or ''}"
+            == occurrence.account_scope
             and w.window_minutes == occurrence.window_minutes
             and w.resets_at is not None
             and aware(w.resets_at) == aware(occurrence.resets_at)
@@ -273,15 +290,13 @@ class AutomationService:
                     for w in windows
                     if w.observed_at.tzinfo is not None
                 ):
-                    usage_error = "No fresh usage observation. Check the Codex connection."
+                    usage_error = "No fresh usage observation. Check the selected agent connection."
             except (ValueError, OSError, TimeoutError, httpx.HTTPError) as error:
                 log.warning(
                     "automations.usage_unavailable", extra={"error_type": type(error).__name__}
                 )
                 windows = []
-                usage_error = (
-                    "Usage unavailable. Check the Codex connection; the next check will retry."
-                )
+                usage_error = "Usage unavailable. Check Settings; the next check will retry."
             notify: set[str] = set()
             async with self.sessions.begin() as db:
                 await db.execute(text("BEGIN IMMEDIATE"))
@@ -304,23 +319,43 @@ class AutomationService:
                         if not trigger.matches(window, now):
                             continue
                         assert window.resets_at is not None and window.window_minutes is not None
+                        scope = (
+                            f"{window.metadata.get('agent', 'codex')}:"
+                            f"{window.metadata.get('account_id') or ''}"
+                        )
                         occurrence = await db.scalar(
                             select(AutomationOccurrence).where(
                                 AutomationOccurrence.automation_id == row.id,
+                                AutomationOccurrence.account_scope == scope,
                                 AutomationOccurrence.limit_id == window.limit_id,
                                 AutomationOccurrence.window_minutes == window.window_minutes,
                                 AutomationOccurrence.resets_at == aware(window.resets_at),
                             )
                         )
                         if occurrence is None:
+                            template = RunTemplate.model_validate(row.run_template)
+                            selected = (await agent_config(db))["name"]
+                            if template.configured_agent and template.configured_agent != selected:
+                                for config in template.projects:
+                                    project = await db.get(Project, config.project_id)
+                                    if project:
+                                        config.model = project.default_model
+                                        config.reasoning_effort = cast(
+                                            Reasoning, project.default_reasoning_effort
+                                        )
+                                for condition in template.stop_conditions:
+                                    if isinstance(condition, UsageStop):
+                                        condition.limit_id = None
+                            template.configured_agent = selected
                             occurrence = AutomationOccurrence(
                                 automation_id=row.id,
                                 automation_name=row.name,
+                                account_scope=scope,
                                 limit_id=window.limit_id,
                                 window_minutes=window.window_minutes,
                                 resets_at=aware(window.resets_at),
                                 matched_window=window.model_dump(mode="json"),
-                                run_template=row.run_template,
+                                run_template=template.model_dump(mode="json"),
                                 mode=row.mode,
                                 status="pending" if row.mode == "approval" else "ready",
                             )

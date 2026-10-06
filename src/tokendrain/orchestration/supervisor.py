@@ -368,7 +368,7 @@ class Supervisor:
                     if turn_cancel.is_set():
                         interrupt_started = interrupt_started or time.monotonic()
                         if time.monotonic() - interrupt_started > 12:
-                            raise TimeoutError("Codex interrupt timed out; workspace preserved")
+                            raise TimeoutError("Agent interrupt timed out; workspace preserved")
                     await asyncio.sleep(0.25)
 
             watcher = asyncio.create_task(monitor())

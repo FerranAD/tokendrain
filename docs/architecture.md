@@ -16,7 +16,9 @@ flowchart LR
     Daemon -->|framed JSON over vsock| Guest[tokendrain-guestd]
     VMM --> Guest
     Guest -->|stdio JSON-RPC| Codex[Codex app-server]
+    Guest -->|streamed JSON| Claude[Claude Code CLI]
     Codex --> Machine[(Persistent project VM)]
+    Claude --> Machine
     Control[Current read-only control bundle] --> Guest
     Guest --> Runtime[Runtime credentials in tmpfs]
 ```
@@ -26,8 +28,8 @@ flowchart LR
 | `tokendraind` | API, UI, projects, runs, scheduling, account refresh, GitHub broker, reports and events | Unprivileged service user; can decrypt application credentials |
 | `tokendrain-helper` | Bounded VM start/stop/list, read-only diagnostics, TAP policy, transient units, recovery records | Restricted privileged service with fixed operations and validated IDs |
 | Firecracker | KVM virtualization and guest devices | Dedicated VMM user, restricted filesystem view and cgroups |
-| `tokendrain-guestd` | Codex supervision/proxy, runtime credentials, rotation and shutdown | Root inside one guest |
-| Codex and its commands | Autonomous project work | Full guest access, assigned runtime credentials and permitted destinations |
+| `tokendrain-guestd` | Agent supervision, Codex proxy, Claude streaming, runtime credentials, rotation and shutdown | Root inside one guest |
+| Selected agent and its commands | Autonomous project work | Full guest access, assigned runtime credentials and permitted destinations |
 
 Infrastructure operations sit behind explicit storage, VM, command-runner, and session interfaces. Test backends replace these dependencies without creating a separate execution architecture.
 
@@ -143,3 +145,10 @@ There is one administrator trust domain per installation. VM separation is not a
 The host evaluates usage rules at startup and every 15 minutes, refreshing account metadata when needed without model inference. Each matching provider limit/window/reset has a durable occurrence containing the saved run configuration. Automatic launches and website approvals use the ordinary transactional run-admission service. Pending approval requests are committed before ntfy delivery; notifications contain review links without authorization tokens.
 
 Reset deadlines are fixed on the resulting run and enforced by the execution monitor independently of trigger cadence. They interrupt substantive work and graceful wrap-up and prevent queued executions from starting after reset. Editing or disabling rules cancels pending occurrences without changing existing runs.
+
+
+## Agent choice
+
+Settings stores one global agent: Codex or Claude Code. Queued and running executions prevent switching. Projects retain separate model defaults and conversation IDs for each agent, sharing their workspace and task board. Saved templates record their originating agent; launches after a switch use the selected agent's project defaults. Pending usage approvals are cancelled on agent or account changes, and observations and automation deduplication distinguish agents and accounts.
+
+Claude browser sign-in runs on the host in an isolated temporary directory. OAuth credentials are encrypted, refresh stays on the host, and guests receive access tokens for subscription inference. Idle usage checks use the private OAuth usage endpoint with fifteen-minute caching and rate-limit backoff. See [Claude setup](claude-auth.md).

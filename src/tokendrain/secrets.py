@@ -34,7 +34,11 @@ PROTECTED = {
 
 
 def secret_name(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,199}", value) or value in PROTECTED:
+    if (
+        not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,199}", value)
+        or value in PROTECTED
+        or value.startswith(("CLAUDE_", "ANTHROPIC_"))
+    ):
         raise ValueError("Secret name is invalid or reserved for runtime credentials")
     return value
 

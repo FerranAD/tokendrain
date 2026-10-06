@@ -2,7 +2,7 @@
 
 All paths are under `/api/v1`. JSON responses use bare arrays for lists and objects for detail. IDs are strings. Timestamps are ISO 8601, nullable before start/finish. An error has `detail` (string or FastAPI validation errors). Mutations return the created/updated object except deletes (204 is supported).
 
-Authentication: `POST /session {token}` establishes a same-origin HttpOnly cookie; `DELETE /session` signs out. An unauthenticated request returns 401. All fetch and SSE requests use same-origin credentials. POST/PATCH/DELETE requests are JSON and send `X-Tokendrain-Request: 1` as a CSRF defense in addition to server Origin validation.
+Authentication: `POST /session {token}` establishes a same-origin HttpOnly cookie; `DELETE /session` signs out. An unauthenticated request returns 401. All fetch and SSE requests use same-origin credentials. POST/PUT/PATCH/DELETE requests are JSON and send `X-Tokendrain-Request: 1` as a CSRF defense in addition to server Origin validation.
 
 `GET /events` is SSE. Default-message data is JSON with a `type`, optional `project_id`, `run_id`, `execution_id`, `message`, `timestamp`. Any message invalidates displayed API data (coalesced); `execution.log` messages also append to the live run log. Server must replay events with Last-Event-ID if supported. UI reloads automatically on reconnect; connection status appears in Run activity.
 
@@ -150,3 +150,19 @@ Rules include `id`, `created_at`, `last_checked_at`, and `last_error`. Occurrenc
 Evaluation occurs at daemon startup and every 900 seconds. Each rule/provider-window/reset combination creates at most one occurrence. Run creation commits with the occurrence's launched state. Notifications open the configured public URL plus `/automation-occurrences/{id}` and contain no authorization token.
 
 Run stop conditions now also accept `{"kind":"deadline","at":"2026-10-05T20:00:00Z"}` with a required timezone. Automation launches add a fixed reset deadline and bind otherwise unrestricted triggering-window usage stops to the matched limit ID. Deadline enforcement is a hard stop, including during graceful finalization. Run responses include nullable `automation_occurrence_id` and `automation_name`.
+
+
+## Global agent and Claude Code
+
+- `GET /agent` returns the selected agent's connection status plus `name` (`codex` or `claude_code`) and `label`.
+- `PUT /agent {name}` changes the global agent. Queued or running executions block switching (409). Project model defaults and session IDs are retained separately for each agent; schedules, reminders, and automations follow the selection. Pending automation approvals are cancelled.
+- `GET /agent/models` returns models for the selected agent. Claude uses `sonnet`, `opus`, and `haiku` aliases.
+- `GET /auth/claude` returns `{connected,account_label,expires_at,credential_error}` without credentials.
+- `POST /auth/claude/login` (201) starts a ten-minute browser login. Returns `{id,status,authorization_url,expires_at,error}`.
+- `GET /auth/claude/login/{id}` polls that login. Status is `starting`, `waiting`, `connected`, `failed`, `expired`, or `cancelled`.
+- `POST /auth/claude/login/{id}/code {code}` submits the code displayed by Claude.
+- `DELETE /auth/claude/login/{id}` cancels login and removes temporary files.
+- `POST /auth/claude/check` refreshes usage metadata without inference; rate-limit backoff still applies.
+- `DELETE /auth/claude` disconnects locally; queued or running executions block changes.
+
+Run templates carry `configured_agent`, identifying the agent their model overrides were saved for. When another agent is selected, launches use that agent's project defaults. Runs, executions, and usage history record their agent; usage history and automation deduplication also distinguish accounts.

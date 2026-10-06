@@ -48,8 +48,8 @@ export function NotificationSettings() {
     <section className="panel" id="notifications">
       <h2>Notifications</h2>
       <p className="muted">
-        Get an ntfy reminder when your Codex usage limit is about to reset and you still have
-        capacity left. Subscribe to the same server and topic in your ntfy app.
+        Get an ntfy reminder when your usage limit is about to reset and you still have capacity
+        left. Subscribe to the same server and topic in your ntfy app.
       </p>
       <ErrorNotice error={resource.error} />
       {resource.data ? (

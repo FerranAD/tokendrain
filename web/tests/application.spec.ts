@@ -101,6 +101,17 @@ async function fixture(page: Page, options: { signedIn?: boolean } = {}) {
       '/automation-occurrences': [],
       '/usage': windows,
       '/auth/openai': { connected: true, method: 'import', account_label: 'user@example.test' },
+      '/agent': {
+        name: 'codex',
+        label: 'Codex',
+        connected: true,
+        method: 'import',
+        account_label: 'user@example.test',
+      },
+      '/agent/models': [
+        { id: 'codex-test', name: 'Codex Test', reasoning_efforts: ['low', 'medium', 'high'] },
+        { id: 'codex-other', name: 'Other', reasoning_efforts: ['medium', 'high'] },
+      ],
       '/auth/openai/models': [
         { id: 'codex-test', name: 'Codex Test', reasoning_efforts: ['low', 'medium', 'high'] },
         { id: 'codex-other', name: 'Other', reasoning_efforts: ['medium', 'high'] },
@@ -196,6 +207,7 @@ test('run preparation serializes per-project models and actual usage windows', a
   await page.getByRole('button', { name: 'Start run', exact: false }).click();
   await expect(page).toHaveURL(/\/runs\/run-1234$/);
   expect(writes.find((write) => write.path === '/runs')?.body).toEqual({
+    configured_agent: 'codex',
     projects: [
       { project_id: 'project-a', model: 'codex-test', reasoning_effort: 'medium' },
       { project_id: 'project-b', model: 'codex-other', reasoning_effort: 'high' },
@@ -306,6 +318,7 @@ test('schedules use the ordinary run template with timezone-aware timing', async
     timezone: 'Europe/Madrid',
     enabled: true,
     run_template: {
+      configured_agent: 'codex',
       projects: [{ project_id: 'project-a', model: 'codex-test', reasoning_effort: 'medium' }],
       stop_conditions: [{ kind: 'provider_limit' }, { kind: 'project_completed' }],
       parallel: true,
@@ -1221,10 +1234,10 @@ test('project creation points to Codex setup when the account is disconnected', 
   page,
 }) => {
   const { writes, errors } = await fixture(page);
-  await page.route('**/api/v1/auth/openai', (route) =>
-    route.fulfill({ json: { connected: false } }),
+  await page.route('**/api/v1/agent', (route) =>
+    route.fulfill({ json: { name: 'codex', label: 'Codex', connected: false } }),
   );
-  await page.route('**/api/v1/auth/openai/models', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/v1/agent/models', (route) => route.fulfill({ json: [] }));
   await page.goto('/projects');
   await page.getByRole('button', { name: 'New project', exact: true }).click();
   const notice = page.locator('.callout').filter({ hasText: 'Configure Codex' });
@@ -1482,5 +1495,79 @@ test('live activity follows appended and resized content, pauses on scrolling up
   await page.setViewportSize({ width: 700, height: 900 });
   await expect.poll(gap).toBeLessThan(3);
   await expect(page.getByRole('button', { name: '↓ Jump to latest' })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('Claude browser login follows the global agent selector without uploading credentials', async ({
+  page,
+}) => {
+  const { errors } = await fixture(page);
+  let selected = 'codex';
+  let connected = false;
+  let started = false;
+  await page.route('**/api/v1/agent', async (route) => {
+    if (route.request().method() === 'PUT') selected = route.request().postDataJSON().name;
+    await route.fulfill({
+      json: { name: selected, label: selected === 'codex' ? 'Codex' : 'Claude Code', connected },
+    });
+  });
+  await page.route('**/api/v1/auth/claude', (route) =>
+    route.fulfill({ json: { connected, account_label: connected ? 'test@example.com' : null } }),
+  );
+  await page.route('**/api/v1/auth/claude/login', (route) => {
+    started = true;
+    return route.fulfill({
+      status: 201,
+      json: {
+        id: 'login-1',
+        status: 'waiting',
+        authorization_url: 'https://claude.com/oauth/authorize?state=test',
+      },
+    });
+  });
+  await page.route('**/api/v1/auth/claude/login/login-1', (route) =>
+    route.fulfill({
+      json: {
+        id: 'login-1',
+        status: connected ? 'connected' : 'waiting',
+        authorization_url: 'https://claude.com/oauth/authorize?state=test',
+      },
+    }),
+  );
+  await page.route('**/api/v1/auth/claude/login/login-1/code', (route) => {
+    expect(route.request().postDataJSON()).toEqual({ code: 'browser-code' });
+    connected = true;
+    return route.fulfill({ json: { id: 'login-1', status: 'connected' } });
+  });
+  await page.goto('/settings');
+  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption('claude_code');
+  await expect(page.getByRole('heading', { name: 'Claude Code account' })).toBeVisible();
+  await expect(page.locator('#claude input[type=file]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Connect Claude Code', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Sign in to Claude' })).toHaveAttribute(
+    'href',
+    /claude.com\/oauth\/authorize/,
+  );
+  await page.getByLabel('Claude login code').fill('browser-code');
+  await page.getByRole('button', { name: 'Complete login' }).click();
+  await expect(page.locator('#claude')).toContainText('test@example.com');
+  expect(started).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('unconnected Claude project defaults link to Claude account settings', async ({ page }) => {
+  const { errors } = await fixture(page);
+  await page.route('**/api/v1/agent', (route) =>
+    route.fulfill({ json: { name: 'claude_code', label: 'Claude Code', connected: false } }),
+  );
+  await page.goto('/projects');
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  const notice = page.locator('.callout').filter({ hasText: 'Configure Claude Code' });
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole('link', { name: 'Settings' })).toHaveAttribute(
+    'href',
+    '/settings#claude',
+  );
+  await expect(page.getByLabel('Default model', { exact: true })).toHaveCount(0);
   expect(errors).toEqual([]);
 });

@@ -15,6 +15,12 @@
         "aarch64-linux"
       ];
       eachSystem = nixpkgs.lib.genAttrs systems;
+      claudeCodeFor =
+        system:
+        (import nixpkgs {
+          inherit system;
+          config.allowUnfreePredicate = package: nixpkgs.lib.getName package == "claude-code";
+        }).claude-code;
       mkGuest =
         system:
         nixpkgs.lib.nixosSystem {
@@ -41,7 +47,10 @@
             '';
           });
           tokendrain-guestd = app;
-          control = pkgs.callPackage ./nix/control.nix { guestd = app; };
+          control = pkgs.callPackage ./nix/control.nix {
+            guestd = app;
+            claude = claudeCodeFor system;
+          };
           guest-artifacts = pkgs.callPackage ./nix/guest-artifacts.nix {
             inherit guest;
             control = self.packages.${system}.control;
@@ -55,6 +64,9 @@
         services.tokendrain.codexPackage =
           lib.mkDefault
             nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system}.codex;
+        services.tokendrain.claudeCodePackage = lib.mkDefault (
+          claudeCodeFor pkgs.stdenv.hostPlatform.system
+        );
         services.tokendrain.package =
           lib.mkDefault
             self.packages.${pkgs.stdenv.hostPlatform.system}.tokendrain;
@@ -101,7 +113,10 @@
               echo '__version__ = "control-test-B"' >> $out/${pkgs.python312.sitePackages}/tokendrain/__init__.py
             '';
           });
-          upgradeControl = pkgs.callPackage ./nix/control.nix { guestd = upgradeGuestd; };
+          upgradeControl = pkgs.callPackage ./nix/control.nix {
+            guestd = upgradeGuestd;
+            claude = claudeCodeFor system;
+          };
           upgradeArtifacts = self.packages.${system}.guest-artifacts.override { control = upgradeControl; };
         in
         {

@@ -291,7 +291,9 @@ function Dashboard() {
         </div>
         <ErrorNotice error={usage.error} />
         <UsageCards windows={usage.data ?? []} />
-        <p className="tiny muted">Includes usage from your other Codex sessions.</p>
+        <p className="tiny muted">
+          Includes usage from your other sessions with the selected agent.
+        </p>
       </section>
       <div className="dashboard-stats">
         <div>

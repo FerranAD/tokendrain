@@ -9,6 +9,7 @@ All options below are under `services.tokendrain`. Import `tokendrain.nixosModul
 | `enable` | Boolean | `false` | Enable the daemon, privileged VM helper, service users, guest networking, and systemd units. |
 | `package` | Package | Flake's `packages.<system>.tokendrain` | Application package, including the compiled website. The bare module has no default; the flake module supplies it. |
 | `codexPackage` | Package | Flake's pinned `nixpkgs` Codex package | Host `codex app-server` used for authentication and usage probes. The bare module defaults to `pkgs.codex`. Guest Codex comes from the guest artifacts. |
+| `claudeCodePackage` | Package | Flake's pinned `nixpkgs` Claude Code package | Host `claude auth login` for browser-assisted subscription sign-in. Guest Claude Code comes from the control bundle. The flake allows this unfree package; a bare-module installation must allow `claude-code` explicitly. |
 | `stateDirectory` | String | `"/var/lib/tokendrain"` | Database, encrypted credentials, and persistent project machines. Must be an absolute path without spaces. Changing it does not move existing data. |
 | `masterKeyFile` | Null or string | `null` | Runtime secret path containing a 32-byte encryption key, or its base64 encoding. With `null`, generate a protected key at `/var/lib/tokendrain-keys/master.key` on first start. |
 | `auth.mode` | `"token"` or `"none"` | `"token"` | Require the application's admin-token login, or rely on private-network / external authentication. |
@@ -78,4 +79,4 @@ services.tokendrain = {
 };
 ```
 
-These are all 20 options exported by the module. Project tasks, models, GitHub bindings, usage stop thresholds, cron schedules, automations, and ntfy destinations are configured in the website rather than through NixOS options.
+These are all 21 options exported by the module. Project tasks, models, GitHub bindings, usage stop thresholds, cron schedules, automations, and ntfy destinations are configured in the website rather than through NixOS options.

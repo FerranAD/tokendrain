@@ -10,6 +10,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tokendrain.agents import agent_config
 from tokendrain.db.models import (
     AutomationOccurrence,
     Event,
@@ -260,7 +261,7 @@ class ProjectService:
         async with self.sessions() as db:
             if not await db.get(Project, project_id):
                 raise LookupError("Project not found")
-            active = await db.scalar(
+            occupied = await db.scalar(
                 select(ProjectExecution.id)
                 .where(
                     ProjectExecution.project_id == project_id,
@@ -268,7 +269,7 @@ class ProjectService:
                 )
                 .limit(1)
             )
-            if active:
+            if occupied:
                 raise ValueError("Project has an active or queued execution")
 
     async def tasks(self, project_id: str) -> list[dict[str, Any]]:
@@ -379,12 +380,12 @@ class RunService:
             await db.execute(text("BEGIN IMMEDIATE"))
             if await db.get(Setting, "provider_change"):
                 raise ValueError("Another credential change is in progress")
-            active = await db.scalar(
+            occupied = await db.scalar(
                 select(ProjectExecution.id)
                 .where(ProjectExecution.status.not_in([state.value for state in TERMINAL]))
                 .limit(1)
             )
-            if active:
+            if occupied:
                 raise ValueError("Cancel or finish active Runs before changing credentials")
             db.add(Setting(key="provider_change", value={"started_at": utcnow().isoformat()}))
         self._credential_owner = task
@@ -405,11 +406,20 @@ class RunService:
     ) -> str:
         if await db.get(Setting, "provider_change"):
             raise ValueError("Credential configuration is changing; retry after it completes")
+        active = (await agent_config(db))["name"]
+        use_defaults = template.configured_agent is not None and template.configured_agent != active
         run = Run(
             id=new_id(),
+            agent=active,
             parallel=template.parallel,
             threshold_mode=template.threshold_mode,
-            stop_conditions=[rule.model_dump(mode="json") for rule in template.stop_conditions],
+            stop_conditions=[
+                {
+                    **rule.model_dump(mode="json"),
+                    **({"limit_id": None} if use_defaults and rule.kind == "usage" else {}),
+                }
+                for rule in template.stop_conditions
+            ],
             schedule_id=schedule_id,
             scheduled_for=scheduled_for,
         )
@@ -418,7 +428,7 @@ class RunService:
             project = await db.get(Project, config.project_id)
             if not project:
                 raise ValueError(f"Project {config.project_id} no longer exists")
-            active = await db.scalar(
+            occupied = await db.scalar(
                 select(ProjectExecution.id)
                 .where(
                     ProjectExecution.project_id == project.id,
@@ -426,18 +436,21 @@ class RunService:
                 )
                 .limit(1)
             )
-            if active:
+            if occupied:
                 raise ValueError(
                     f"Project {project.name} already has an active or queued execution"
                 )
             pending.append(
                 ProjectExecution(
+                    agent=active,
                     run_id=run.id,
                     project_id=project.id,
-                    model=config.model or project.default_model,
+                    model=project.default_model
+                    if use_defaults
+                    else config.model or project.default_model,
                     reasoning_effort=(
                         config.reasoning_effort
-                        if "reasoning_effort" in config.model_fields_set
+                        if not use_defaults and "reasoning_effort" in config.model_fields_set
                         else project.default_reasoning_effort
                     ),
                 )
@@ -569,7 +582,29 @@ class RunService:
     async def observe(self, windows: list[UsageWindow], execution_id: str | None = None) -> None:
         value = [window.model_dump(mode="json") for window in windows]
         async with self.sessions.begin() as db:
-            db.add(UsageSnapshot(execution_id=execution_id, windows=value))
+            config = await agent_config(db)
+            agent = windows[0].metadata.get("agent", config["name"]) if windows else config["name"]
+            account = (
+                windows[0].metadata.get("account_id", config.get("account_id"))
+                if windows
+                else config.get("account_id")
+            )
+            value = [
+                {
+                    **window,
+                    "metadata": {
+                        **window.get("metadata", {}),
+                        "agent": agent,
+                        "account_id": account,
+                    },
+                }
+                for window in value
+            ]
+            db.add(
+                UsageSnapshot(
+                    execution_id=execution_id, windows=value, agent=agent, account_id=account
+                )
+            )
             execution = await db.get(ProjectExecution, execution_id) if execution_id else None
             run_id = execution.run_id if execution else None
             project_id = execution.project_id if execution else None
@@ -583,7 +618,10 @@ class RunService:
 
     async def latest_usage(self) -> list[UsageWindow]:
         async with self.sessions() as db:
-            row = await db.scalar(select(UsageSnapshot).order_by(UsageSnapshot.id.desc()).limit(1))
+            config = await agent_config(db)
+            query = select(UsageSnapshot).where(UsageSnapshot.agent == config["name"])
+            query = query.where(UsageSnapshot.account_id == config.get("account_id"))
+            row = await db.scalar(query.order_by(UsageSnapshot.id.desc()).limit(1))
             return [UsageWindow.model_validate(value) for value in row.windows] if row else []
 
     async def prune_events(self, before: datetime) -> None:

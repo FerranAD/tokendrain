@@ -1,4 +1,5 @@
 import { NumberInput } from './number-input';
+import type { AgentStatus } from './types';
 import { Icon } from './icons';
 import { ModelSelector } from './model-selector';
 import { confirmDiscardChanges, UnsavedNotice, useUnsavedChanges } from './drafts';
@@ -218,6 +219,7 @@ export function RunBuilder({
 }) {
   const projects = useResource<Project[]>('/projects');
   const usage = useResource<UsageWindow[]>('/usage');
+  const agent = useResource<AgentStatus>('/agent');
   const [configs, setConfigs] = useState<ProjectConfig[]>(initial?.projects ?? []);
   const [conditions, setConditions] = useState<StopCondition[]>(
     initial?.stop_conditions ?? [{ kind: 'provider_limit' }, { kind: 'project_completed' }],
@@ -251,16 +253,36 @@ export function RunBuilder({
     initial?.threshold_mode ?? 'graceful',
   );
   const [parallel, setParallel] = useState(initial?.parallel ?? true);
-  const [initialized, setInitialized] = useState(false);
+  const [initialized, setInitialized] = useState<string>();
   const action = useAction();
   const configuration = { configs, conditions, thresholdMode, parallel, draftContext };
   // Preparation is a new configuration, not edits to a saved Run or schedule.
   const draft = useUnsavedChanges(configuration, configuration, !!initial);
   // Apply the URL selection once after projects arrive without resetting edits on live updates.
-  if (!initialized && projects.data) {
-    setInitialized(true);
+  if (projects.data && !projects.loading && agent.data && initialized !== agent.data.name) {
+    setInitialized(agent.data.name);
+    if (
+      initialized ||
+      (initial?.configured_agent && initial.configured_agent !== agent.data.name)
+    ) {
+      setConfigs(
+        (initialized ? configs : initial?.projects || []).map((config) => {
+          const project = projects.data?.find((item) => item.id === config.project_id);
+          return {
+            ...config,
+            model: project?.default_model || '',
+            reasoning_effort: project?.default_reasoning_effort || 'medium',
+          };
+        }),
+      );
+      setConditions((old) =>
+        old.map((condition) =>
+          condition.kind === 'usage' ? { ...condition, limit_id: undefined } : condition,
+        ),
+      );
+    }
     const project = projects.data.find((item) => item.id === selectedProject);
-    if (!initial && project) {
+    if (!initialized && !initial && project) {
       const selected = [
         {
           project_id: project.id,
@@ -308,6 +330,7 @@ export function RunBuilder({
           void action.run(() =>
             onSubmit(
               {
+                configured_agent: agent.data?.name,
                 projects: configs.map((config) => ({
                   ...config,
                   reasoning_effort: config.reasoning_effort || 'medium',
@@ -457,7 +480,7 @@ export function RunBuilder({
               })}
               {!observed.length && (
                 <p className="small muted">
-                  Usage rules become available after Codex reports your account’s window metadata.
+                  Usage rules become available after your agent reports the account’s usage windows.
                   You can use a runtime limit in the meantime.
                 </p>
               )}
@@ -771,7 +794,8 @@ export function RunPage({ id }: { id: string }) {
                   <p className="mono tiny">
                     Execution: {execution.id}
                     <br />
-                    Codex thread: {execution.thread_id}
+                    {execution.agent === 'claude_code' ? 'Claude session' : 'Codex thread'}:{' '}
+                    {execution.thread_id}
                   </p>
                 </details>
               )}

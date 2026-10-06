@@ -129,3 +129,12 @@ secret values but cannot detect arbitrary encodings. An agent can deliberately
 copy a runtime credential into its workspace; runtime-only injection prevents
 accidental automatic persistence, not malicious persistence by guest software.
 Host code treats all guest JSON, event text and report content as untrusted.
+
+
+## Claude Code lifecycle
+
+`credentials_set` accepts either the existing `openai` runtime object or `claude: {access_token}`, plus assigned project secrets and GitHub token. Exactly one agent is required. Claude refresh tokens remain on the host.
+
+`claude_initialize {session_id}` returns a new UUID or resumes the supplied session. `claude_turn {prompt,model,effort,schema}` acknowledges startup immediately; streamed CLI JSON arrives as `claude/event`, and completion as `claude/result` with `structured_output` or error flags. `guest/log` carries redacted stderr. `claude_interrupt` interrupts the process group and kills it if it fails to stop. Host disconnect also stops the process.
+
+The guest runs `claude -p --output-format stream-json --json-schema ...` with subscription OAuth in its environment. Persistent Claude configuration retains session history alongside the shared workspace. Authentication configuration and provider-routing environment variables cannot be supplied as project secrets.

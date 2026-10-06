@@ -29,7 +29,7 @@ let
 in
 {
   options.services.tokendrain = {
-    enable = mkEnableOption "autonomous Codex projects in isolated Firecracker microVMs";
+    enable = mkEnableOption "autonomous projects in isolated Firecracker microVMs";
     package = mkOption {
       type = types.package;
       description = "Tokendrain application package.";
@@ -38,6 +38,11 @@ in
       type = types.package;
       default = pkgs.codex;
       description = "Host Codex app-server used for authentication and usage probes.";
+    };
+    claudeCodePackage = mkOption {
+      type = types.package;
+      default = pkgs.claude-code;
+      description = "Host Claude Code CLI used for browser-assisted subscription login.";
     };
     stateDirectory = mkOption {
       type = types.str;
@@ -240,6 +245,7 @@ in
     environment.systemPackages = [
       cfg.package
       cfg.codexPackage
+      cfg.claudeCodePackage
       pkgs.firecracker
       pkgs.iproute2
       pkgs.nftables
@@ -363,6 +369,7 @@ in
       };
       path = [
         cfg.codexPackage
+        cfg.claudeCodePackage
         pkgs.git
         pkgs.coreutils
         pkgs.e2fsprogs

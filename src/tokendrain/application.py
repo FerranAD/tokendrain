@@ -11,6 +11,8 @@ import httpx
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from tokendrain.agents import reset_account
+from tokendrain.auth.claude import ClaudeAuthManager
 from tokendrain.auth.openai import OpenAIAuthManager
 from tokendrain.automations import AutomationService
 from tokendrain.config import Settings
@@ -21,6 +23,7 @@ from tokendrain.domain import UsageWindow, utcnow
 from tokendrain.events import EventBus
 from tokendrain.github.provider import GitHubProvider
 from tokendrain.notifications import NtfyService
+from tokendrain.orchestration.claude import AgentSessionFactory, ClaudeSessionFactory
 from tokendrain.orchestration.driver import RealSessionFactory, SessionFactory
 from tokendrain.orchestration.mock import MockSessionFactory, MockStorage, MockVmBackend
 from tokendrain.orchestration.supervisor import Supervisor
@@ -63,6 +66,7 @@ class Application:
     started_at: float
     notifications: NtfyService
     automations: AutomationService
+    claude: ClaudeAuthManager
     task: asyncio.Task[None] | None = None
     probe_lock: asyncio.Lock | None = None
     probe_cache: dict[str, object] | None = None
@@ -105,7 +109,7 @@ class Application:
             http = overrides.http or httpx.AsyncClient(timeout=30, follow_redirects=False)
             auth = OpenAIAuthManager(credentials, http, runtime_dir=settings.auth_runtime_dir)
             github = GitHubProvider(credentials, http)
-            async with sessions() as db:
+            async with sessions.begin() as db:
                 saved = await db.get(Setting, "platform")
                 if saved:
                     settings.max_concurrency = int(saved.value["concurrency"])
@@ -113,6 +117,15 @@ class Application:
                     settings.default_vcpus = defaults["vcpus"]
                     settings.default_memory_mib = defaults["memory_mib"]
                     settings.default_disk_gib = defaults["disk_gib"]
+                agent = await db.get(Setting, "agent")
+                if agent:
+                    settings.active_agent = agent.value["name"]
+                else:
+                    db.add(
+                        Setting(
+                            key="agent", value={"name": settings.active_agent, "account_id": None}
+                        )
+                    )
             settings.max_concurrency = min(settings.max_concurrency, settings.concurrency_limit)
             settings.default_vcpus = min(settings.default_vcpus, settings.vcpus_limit)
             settings.default_memory_mib = min(
@@ -134,10 +147,15 @@ class Application:
                 if settings.backend == "mock"
                 else FirecrackerBackend(settings.helper_socket)
             )
+            claude = ClaudeAuthManager(credentials, http, settings.auth_runtime_dir)
             factory = overrides.factory or (
                 MockSessionFactory()
                 if settings.backend == "mock"
-                else RealSessionFactory(auth, settings.turn_timeout_seconds)
+                else AgentSessionFactory(
+                    settings,
+                    RealSessionFactory(auth, settings.turn_timeout_seconds),
+                    ClaudeSessionFactory(claude, settings.turn_timeout_seconds),
+                )
             )
             events = EventBus(sessions)
             runs, projects = RunService(sessions, events), ProjectService(sessions, storage, events)
@@ -168,7 +186,7 @@ class Application:
 
                 result = await account_probe(app, force=True)
                 if result.get("usage_error") or not result.get("usage"):
-                    raise ValueError("Cannot refresh usage. Check the Codex connection and retry.")
+                    raise ValueError("Cannot refresh usage. Check the agent connection and retry.")
                 return await runs.latest_usage()
 
             notifications = NtfyService(
@@ -196,8 +214,18 @@ class Application:
                 time.monotonic(),
                 notifications,
                 automations,
+                claude,
                 probe_lock=asyncio.Lock(),
             )
+
+            async def save_claude_login(record: dict[str, object]) -> None:
+                async with runs.credentials_change():
+                    await claude.save(record)
+                    if settings.active_agent == "claude_code":
+                        await reset_account(app, str(record["id"]))
+                    await events.publish("claude.connected")
+
+            claude.save_login = save_claude_login
             if overrides.start_workers:
                 app.task = asyncio.create_task(app.serve(), name="tokendrain-services")
                 app.task.add_done_callback(app.service_finished)
@@ -235,6 +263,7 @@ class Application:
             await asyncio.sleep(3600)
 
     async def close(self) -> None:
+        await self.claude.cancel_login()
         if self.task:
             self.task.cancel()
             try:

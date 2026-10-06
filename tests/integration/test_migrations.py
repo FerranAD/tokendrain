@@ -23,7 +23,7 @@ async def test_real_alembic_schema_and_idempotency(tmp_path: Path) -> None:
     try:
         async with engine.connect() as connection:
             assert (
-                await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
+                await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0005"
             )
             tables = await connection.run_sync(lambda conn: inspect(conn).get_table_names())
             assert {

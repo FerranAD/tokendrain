@@ -118,7 +118,7 @@ def inspect_checks(
 ) -> list[DoctorCheck]:
     """Local checks: the web daemon deliberately has no VM devices or tools."""
     checks = inspect_vm_checks(settings.guest_artifacts) if scope == "host" else []
-    executables = ["mkfs.ext4", "e2fsck", "resize2fs", "codex"]
+    executables = ["mkfs.ext4", "e2fsck", "resize2fs", "codex", "claude"]
     if scope == "host":
         executables.append("nix")
     for name in executables:

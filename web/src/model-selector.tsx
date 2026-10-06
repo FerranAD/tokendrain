@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useResource } from './api';
-import type { CodexModel } from './types';
+import type { AgentStatus, CodexModel } from './types';
 
 export function ModelSelector({
   model,
@@ -13,13 +13,16 @@ export function ModelSelector({
   effort: string;
   onChange: (values: { model: string; reasoning_effort: string }) => void;
 }) {
-  const models = useResource<CodexModel[]>('/auth/openai/models');
+  const models = useResource<CodexModel[]>('/agent/models');
+  const agent = useResource<AgentStatus>('/agent');
   const selected =
     models.data?.find((m) => m.id === model) ??
     (!model ? models.data?.find((m) => m.is_default) : undefined);
   const efforts = selected?.reasoning_efforts?.length
     ? selected.reasoning_efforts
-    : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    : agent.data?.name === 'claude_code'
+      ? ['low', 'medium', 'high']
+      : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
   useEffect(() => {
     const supported = selected?.reasoning_efforts;
     if (supported?.length && !supported.includes(effort)) {

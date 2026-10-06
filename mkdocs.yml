@@ -1,6 +1,6 @@
 site_name: Tokendrain
 site_url: !ENV [TOKENDRAIN_DOCS_SITE_URL, 'https://ferranad.github.io/tokendrain/']
-site_description: Use the Codex subscription tokens you would otherwise leave unused before the weekly reset.
+site_description: Use the subscription tokens you would otherwise leave unused before the weekly reset.
 repo_url: https://github.com/FerranAD/tokendrain
 repo_name: FerranAD/tokendrain
 docs_dir: docs
@@ -68,6 +68,7 @@ nav:
       - Security & backups: security.md
   - Connect:
       - Codex account: openai-auth.md
+      - Claude Code account: claude-auth.md
       - GitHub App: github-app.md
   - Develop:
       - Development guide: development.md

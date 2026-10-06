@@ -17,8 +17,31 @@ if TYPE_CHECKING:
 
 
 async def account_probe(services: Application, *, force: bool = False) -> dict[str, Any]:
+    value: dict[str, Any]
     assert services.probe_lock is not None
     async with services.probe_lock:
+        if services.settings.active_agent == "claude_code":
+            from tokendrain.agents import CLAUDE_MODELS
+
+            try:
+                windows = await services.claude.windows(force=force)
+                if windows:
+                    await services.runs.observe(windows)
+                value = {
+                    "models": CLAUDE_MODELS,
+                    "usage": {"windows": [w.model_dump(mode="json") for w in windows]},
+                    "observed_at": time.time(),
+                    "usage_error": None if windows else "Claude usage is not available yet.",
+                }
+            except (ValueError, OSError, TimeoutError, httpx.HTTPError):
+                value = {
+                    "models": CLAUDE_MODELS,
+                    "usage": {},
+                    "observed_at": time.time(),
+                    "usage_error": "Claude usage unavailable. Check Settings; it will be retried.",
+                }
+            services.probe_cache = value
+            return value
         cached = services.probe_cache
         if not force and cached and time.time() - float(str(cached["observed_at"])) < 60:
             return cached

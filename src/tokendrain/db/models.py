@@ -29,12 +29,14 @@ class Project(Base):
     default_reasoning_effort: Mapped[str] = mapped_column(String(24), default="medium")
     storage_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     thread_id: Mapped[str | None] = mapped_column(String(200))
+    agent_state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class Run(Base):
     __tablename__ = "runs"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    agent: Mapped[str] = mapped_column(String(24), default="codex")
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -51,6 +53,7 @@ class Run(Base):
 class ProjectExecution(Base):
     __tablename__ = "project_executions"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    agent: Mapped[str] = mapped_column(String(24), default="codex")
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="RESTRICT"), index=True
@@ -92,6 +95,8 @@ class Report(Base):
 class UsageSnapshot(Base):
     __tablename__ = "usage_snapshots"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent: Mapped[str] = mapped_column(String(24), default="codex")
+    account_id: Mapped[str | None] = mapped_column(String(200))
     execution_id: Mapped[str | None] = mapped_column(
         ForeignKey("project_executions.id", ondelete="SET NULL"), index=True
     )
@@ -131,6 +136,7 @@ class AutomationOccurrence(Base):
         ForeignKey("automations.id", ondelete="SET NULL")
     )
     automation_name: Mapped[str] = mapped_column(String(200))
+    account_scope: Mapped[str] = mapped_column(String(250), default="codex:")
     limit_id: Mapped[str] = mapped_column(String(200))
     window_minutes: Mapped[int] = mapped_column(Integer)
     resets_at: Mapped[datetime] = mapped_column(DateTime)
@@ -147,6 +153,7 @@ class AutomationOccurrence(Base):
         Index(
             "uq_automation_occurrence",
             "automation_id",
+            "account_scope",
             "limit_id",
             "window_minutes",
             "resets_at",

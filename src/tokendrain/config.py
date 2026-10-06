@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     shutdown_timeout_seconds: int = Field(default=60, ge=1)
     scheduler_interval_seconds: float = Field(default=10, ge=0.1)
     usage_poll_seconds: float = Field(default=30, ge=1)
+    active_agent: Literal["codex", "claude_code"] = "codex"
 
     @property
     def database_path(self) -> Path:

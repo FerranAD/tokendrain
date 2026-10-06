@@ -6,7 +6,7 @@ import { ModelSelector } from './model-selector';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { mutate, useAction, useResource } from './api';
-import type { Execution, OpenAIStatus, Project, ProjectGitHub, Secret, StorageInfo } from './types';
+import type { AgentStatus, Execution, Project, ProjectGitHub, Secret, StorageInfo } from './types';
 import { GitHubFields, emptyGitHub, githubPayload } from './github-fields';
 import {
   ActionNotice,
@@ -86,7 +86,7 @@ export function ProjectsPage() {
 }
 
 export function NewProject({ close }: { close: () => void }) {
-  const account = useResource<OpenAIStatus>('/auth/openai');
+  const account = useResource<AgentStatus>('/agent');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [model, setModel] = useState('');
@@ -163,7 +163,13 @@ export function NewProject({ close }: { close: () => void }) {
             <Loading />
           ) : !account.data.connected ? (
             <div className="callout">
-              Configure Codex in <Link href="/settings#openai">Settings</Link> to choose a model.
+              Configure {account.data.label || 'Codex'} in{' '}
+              <Link
+                href={account.data.name === 'claude_code' ? '/settings#claude' : '/settings#openai'}
+              >
+                Settings
+              </Link>{' '}
+              to choose a model.
             </div>
           ) : (
             <ModelSelector

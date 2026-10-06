@@ -8,19 +8,19 @@
 
 **You're already paying OpenAI for the tokens. Let's use the fucking tokens.**
 
-Your Codex subscription's weekly limit resets whether you use it or not. tokendrain runs Codex on software work you've approved to consume the usage you'd otherwise leave behind. It keeps working until the tasks finish, it gets blocked, or it reaches your chosen limits.
+Your Codex or Claude subscription's weekly limit resets whether you use it or not. tokendrain runs your selected agent on software work you've approved to consume the usage you'd otherwise leave behind. It keeps working until the tasks finish, it gets blocked, or it reaches your chosen limits.
 
 ![tokendrain dashboard showing usage windows, an active Run, projects, and schedules](docs/assets/dashboard.png)
 
 ## What is tokendrain?
 
-tokendrain is a self-hosted NixOS service that runs Codex on your software projects. Give a project a goal and approved tasks; Codex works inside an isolated Firecracker VM. The workspace and installed tools survive between Runs. You decide what gets worked on and how much remaining usage to spend.
+tokendrain is a self-hosted NixOS service that runs Codex or Claude Code on your software projects. Give a project a goal and approved tasks; the agent works inside an isolated Firecracker VM. The workspace and installed tools survive between Runs. You decide what gets worked on and how much remaining usage to spend.
 
 ## What it actually does
 
 - Works **In progress** and **Todo** Kanban tasks. Discoveries go to **Backlog**, waiting for your approval.
 - Keeps your source files, development tools, and caches between Runs.
-- Runs Codex without command approval prompts inside isolated Firecracker VMs.
+- Runs Codex or Claude Code without command approval prompts inside isolated Firecracker VMs.
 - Reads the provider's actual usage windows and reset times.
 - Stops at your usage thresholds, with either a short wrap-up or hard interruption.
 - Lets each project use GitHub with Read only, Pull requests, or Direct write access.
@@ -53,7 +53,7 @@ The project machine persists between Runs; Tokendrain supplies current control s
 
 ## Usage limits
 
-Accounts don't all have the same limits. tokendrain reads the windows reported by Codex/OpenAI instead of assuming fixed 5-hour and weekly pools. Pick conditions such as:
+Accounts don't all have the same limits. tokendrain reads the windows reported by the selected agent instead of assuming fixed 5-hour and weekly pools. Pick conditions such as:
 
 ```text
 Stop when 5-hour usage reaches 95%
@@ -62,7 +62,7 @@ Stop after 4 hours
 Stop when no approved work remains
 ```
 
-The first matching condition stops the Run. Usage includes other Codex sessions on the account, too.
+The first matching condition stops the Run. Usage includes other sessions with the selected agent on the account, too.
 
 **Graceful stop** is the default. Once the threshold is observed, normal work stops and the current turn is interrupted if necessary. Codex gets one wrap-up turn, bounded to 90 seconds, to settle work, save it where appropriate, update tasks, and leave a checkpoint. Then the VM stops. Putting the tools away may use a little more usage.
 
@@ -161,7 +161,7 @@ Back up the encryption key at `/var/lib/tokendrain-keys/master.key` with your ap
 
 ## First Run
 
-1. Open Settings and import your Codex `auth.json`. Credentials refresh automatically; this isn't a one-hour login. [Authentication details](docs/openai-auth.md).
+1. Open Settings, choose an agent, and connect your account. For Codex, import `auth.json`; for Claude Code, use the browser login. Credentials refresh automatically; this isn't a one-hour login. [Authentication details](docs/openai-auth.md).
 2. Optionally [connect GitHub](docs/github-app.md), choose repositories on GitHub, then select a repository and Read only, Pull requests, or Direct write access for each project. Tokendrain enforces Pull requests mode through GitHub.
 3. Create a project with a description and Todo tasks. Add any required secrets with descriptions of what they're for.
 4. Prepare a Run. Pick projects, models, reasoning levels, stop conditions, and Graceful or Hard behavior.
@@ -176,6 +176,8 @@ Configure **Settings → Notifications** to send reminders through ntfy.sh or yo
 ## Usage automations
 
 Use **Automations** to launch a saved Run when a usage reset is within a chosen number of hours and enough usage remains available. Launch automatically, or receive an ntfy notification and authorize the Run on the website. Rules are checked every **15 minutes** and launch once per matching reset window. Runs default to exhausting the usage and stop at reset to avoid spending the new window. See [usage automations](docs/automations.md).
+
+Choose **Settings → Agent** to use Codex or Claude Code globally. For Claude, click **Connect Claude Code**, open the sign-in link, and paste the code if requested. No credential-file upload is needed. See [Claude setup](docs/claude-auth.md).
 
 ## The VM is the security boundary
 

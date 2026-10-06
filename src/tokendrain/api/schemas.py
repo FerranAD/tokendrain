@@ -2,6 +2,7 @@ from typing import Any
 
 from pydantic import Field, SecretStr
 
+from tokendrain.agents import AgentName
 from tokendrain.domain import Boundary, ProjectCreate
 from tokendrain.github.provider import RepositoryInput
 
@@ -12,6 +13,14 @@ class ProjectCreateInput(ProjectCreate):
 
 class LoginInput(Boundary):
     token: SecretStr
+
+
+class AgentInput(Boundary):
+    name: AgentName
+
+
+class ClaudeLoginCode(Boundary):
+    code: SecretStr = Field(min_length=1, max_length=4096)
 
 
 class ResizeInput(Boundary):

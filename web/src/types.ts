@@ -50,6 +50,7 @@ export interface ProjectConfig {
 }
 
 export interface RunTemplate {
+  configured_agent?: 'codex' | 'claude_code' | null;
   projects: ProjectConfig[];
   stop_conditions: StopCondition[];
   parallel: boolean;
@@ -57,6 +58,7 @@ export interface RunTemplate {
 }
 
 export interface Execution {
+  agent?: 'codex' | 'claude_code';
   id: string;
   project_id: string;
   project_name?: string;
@@ -134,6 +136,11 @@ export interface OpenAIStatus {
   method?: string;
   account_label?: string;
   login?: { id: string; url: string; status: string; error?: string };
+}
+
+export interface AgentStatus extends OpenAIStatus {
+  name: 'codex' | 'claude_code';
+  label: string;
 }
 
 export type GitHubAccessMode = 'read_only' | 'pull_requests' | 'direct_write';
