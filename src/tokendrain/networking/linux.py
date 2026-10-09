@@ -89,7 +89,7 @@ def firewall_rules(allow_lan: bool = False) -> str:
  }}
  chain nat {{
   type nat hook postrouting priority srcnat; policy accept;
-  ip saddr 100.127.0.0/16 oifname != "tdt*" masquerade
+  iifname "tdt*" ip saddr 100.127.0.0/16 oifname != "tdt*" masquerade
  }}
 }}
 """

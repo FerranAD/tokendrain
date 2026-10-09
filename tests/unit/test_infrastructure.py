@@ -135,6 +135,7 @@ def test_network_slots_and_default_isolation() -> None:
     assert "169.254.0.0/16" in rules
     assert "fib daddr type local drop" in rules
     assert "meta nfproto ipv6 drop" in rules
+    assert 'iifname "tdt*" ip saddr 100.127.0.0/16 oifname != "tdt*" masquerade' in rules
     assert "169.254.0.0/16" not in firewall_rules(allow_lan=True)
 
 

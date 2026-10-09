@@ -233,11 +233,14 @@ in
         }
         chain nat {
           type nat hook postrouting priority srcnat; policy accept;
-          ip saddr 100.127.0.0/16 oifname != "tdt*" masquerade
+          iifname "tdt*" ip saddr 100.127.0.0/16 oifname != "tdt*" masquerade
         }
       '';
     };
-    networking.firewall.filterForward = true;
+    # Keep the host's forwarding policy: enabling filterForward here would add
+    # a default-drop chain for every interface, including VPNs and containers.
+    # These allowances apply only when the host already filters forwarding;
+    # the earlier Tokendrain chain still enforces all guest isolation rules.
     networking.firewall.extraForwardRules = ''
       iifname "tdt*" accept
       oifname "tdt*" ct state established,related accept

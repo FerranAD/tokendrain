@@ -122,6 +122,10 @@
         {
           package = self.packages.${system}.tokendrain;
           python = self.packages.${system}.tokendrain-guestd.override { doCheck = true; };
+          networking = import ./nix/tests/networking.nix {
+            inherit pkgs;
+            tokendrainModule = self.nixosModules.tokendrain;
+          };
           firecracker = import ./nix/tests/firecracker.nix {
             inherit pkgs;
             tokendrainModule = self.nixosModules.tokendrain;
