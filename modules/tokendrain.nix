@@ -12,13 +12,14 @@ let
     mkIf
     ;
   cfg = config.services.tokendrain;
+  firecracker = import ../nix/firecracker.nix pkgs;
   helperConfig = pkgs.writeText "tokendrain-helper.json" (
     builtins.toJSON {
       state_dir = cfg.stateDirectory;
       runtime_dir = "/run/tokendrain-vms";
       socket_path = "/run/tokendrain/helper.sock";
       guest_artifacts = toString cfg.microvm.guestArtifacts;
-      firecracker = "${pkgs.firecracker}/bin/firecracker";
+      firecracker = "${firecracker}/bin/firecracker";
       max_concurrency = cfg.concurrency;
       max_memory_mib = cfg.microvm.maxMemoryMiB;
       max_vcpus = cfg.microvm.maxVcpus;
@@ -249,7 +250,7 @@ in
       cfg.package
       cfg.codexPackage
       cfg.claudeCodePackage
-      pkgs.firecracker
+      firecracker
       pkgs.iproute2
       pkgs.nftables
       pkgs.e2fsprogs

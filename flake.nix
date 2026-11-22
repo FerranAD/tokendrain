@@ -88,7 +88,7 @@
               mypy
               nodejs_22
               git
-              firecracker
+              (import ./nix/firecracker.nix pkgs)
               e2fsprogs
               iproute2
               nftables
