@@ -4,7 +4,6 @@
   system.stateVersion = "26.05";
   networking.hostName = "tokendrain-project";
   boot.loader.grub.enable = false;
-  boot.initrd.systemd.enable = false;
   boot.initrd.availableKernelModules = [
     "virtio_pci"
     "virtio_mmio"
